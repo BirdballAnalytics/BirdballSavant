@@ -633,6 +633,27 @@ def fit_expected(df: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------------------------------------------------------
 # Output
 # ----------------------------------------------------------------------------
+def ncaa_index():
+    """Summarise TruMedia files written by scripts/trumedia.py (if any)."""
+    out = {"years": [], "report": None}
+    rep = OUT_DIR / "ncaa-report.json"
+    if rep.exists():
+        try:
+            out["report"] = json.loads(rep.read_text())
+        except ValueError:
+            pass
+    for f in sorted(OUT_DIR.glob("ncaa-[0-9]*.json")):
+        try:
+            d = json.loads(f.read_text())
+        except ValueError:
+            continue
+        out["years"].append({
+            "year": d["year"], "file": f.name, "pulled": d.get("pulled"),
+            "hitters": len(d.get("hitting", {}).get("rows", [])), "pitchers": len(d.get("pitching", {}).get("rows", [])),
+        })
+    return out
+
+
 def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(s).lower()).strip("-")
 
@@ -854,6 +875,7 @@ def build():
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seasons": seasons_meta, "files": manifest, "teams": teams,
         "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report,
+        "ncaa": ncaa_index(),
         "weights": W,
     }
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))

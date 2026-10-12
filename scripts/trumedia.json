@@ -1,0 +1,62 @@
+{
+  "_note": "TruMedia college baseball pull. Credentials come from GitHub secrets (TRUMEDIA_USERNAME, TRUMEDIA_SITENAME, TRUMEDIA_MASTER_TOKEN), never from this file. Set enabled to true once you are comfortable with who can see the site (see README).",
+  "enabled": false,
+  "seasons": [2025, 2026],
+  "seasonType": "REG",
+  "filter": "(team.game.gameLeague = 'D1')",
+  "hitting_columns": [
+    "PA", "AB", "H", "2B", "3B", "HR", "BB", "HBP", "K", "SB",
+    "AVG", "OBP", "SLG", "OPS", "ISO", "BABIP", "wOBA", "xwOBA", "xBA", "xSLG",
+    "K%", "BB%", "ExitVel", "MaxExitVel", "LaunchAng", "HardHit%", "Barrel%", "SweetSpot%",
+    "GB%", "LD%", "FB%", "Pull%", "Swing%", "Chase%", "Whiff%", "InZoneWhiff%", "Contact%", "BatSpeed"
+  ],
+  "pitching_columns": [
+    "G", "GS", "IP", "TBF", "ERA", "FIP", "WHIP", "K/9", "BB/9",
+    "K%|PIT", "BB%|PIT", "K-BB%|PIT", "BA|PIT", "OBP|PIT", "SLG|PIT", "wOBA|PIT", "xwOBA|PIT", "xBA|PIT",
+    "FBVel", "MaxFBVel", "FBSpin", "Extension", "Strike%|PIT", "FPStk%|PIT", "CSW%|PIT",
+    "Whiff%|PIT", "Chase%|PIT", "InZoneWhiff%|PIT", "ExitVel|PIT", "HardHit%|PIT", "Barrel%|PIT", "GB%|PIT"
+  ],
+  "_percentiles": "BirdballSavant stat -> TruMedia column used when ranking against Power 4. Stats with no match fall back to the BC ranking.",
+  "percentile_map": {
+    "hitting": {
+      "xwoba": "xwOBA", "xba": "xBA", "xslg": "xSLG", "avgEV": "ExitVel", "maxEV": "MaxExitVel",
+      "brlPct": "Barrel%", "hhPct": "HardHit%", "ssPct": "SweetSpot%", "batSpd": "BatSpeed",
+      "chase": "Chase%", "whiff": "Whiff%", "kPct": "K%", "bbPct": "BB%"
+    },
+    "pitching": {
+      "xwoba": "xwOBA|PIT", "xba": "xBA|PIT", "fbVelo": "FBVel", "avgEV": "ExitVel|PIT",
+      "chase": "Chase%|PIT", "whiff": "Whiff%|PIT", "kPct": "K%|PIT", "bbPct": "BB%|PIT",
+      "brlPct": "Barrel%|PIT", "hhPct": "HardHit%|PIT", "gbPct": "GB%|PIT", "ext": "Extension", "fbSpin": "FBSpin"
+    }
+  },
+  "qualify": { "hitting_PA": 100, "pitching_IP": 25 },
+  "power4": {
+    "ACC": ["Boston College", "California", "Clemson", "Duke", "Florida State", "Georgia Tech", "Louisville", "Miami", "North Carolina", "NC State", "Notre Dame", "Pittsburgh", "Stanford", "Virginia", "Virginia Tech", "Wake Forest"],
+    "SEC": ["Alabama", "Arkansas", "Auburn", "Florida", "Georgia", "Kentucky", "LSU", "Ole Miss", "Mississippi State", "Missouri", "Oklahoma", "South Carolina", "Tennessee", "Texas", "Texas A&M", "Vanderbilt"],
+    "Big Ten": ["Illinois", "Indiana", "Iowa", "Maryland", "Michigan", "Michigan State", "Minnesota", "Nebraska", "Northwestern", "Ohio State", "Oregon", "Penn State", "Purdue", "Rutgers", "UCLA", "USC", "Washington"],
+    "Big 12": ["Arizona", "Arizona State", "Baylor", "BYU", "Cincinnati", "Houston", "Kansas", "Kansas State", "Oklahoma State", "TCU", "Texas Tech", "UCF", "Utah", "West Virginia"]
+  },
+  "team_aliases": {
+    "Miami": ["Miami (FL)", "Miami (Fla.)", "Miami Hurricanes", "Miami FL"],
+    "NC State": ["North Carolina State", "N.C. State", "NC St."],
+    "Pittsburgh": ["Pitt"],
+    "California": ["Cal", "California Golden Bears"],
+    "Ole Miss": ["Mississippi"],
+    "Florida State": ["Florida St.", "FSU"],
+    "Mississippi State": ["Mississippi St.", "Miss. State", "Miss State"],
+    "Michigan State": ["Michigan St."],
+    "Ohio State": ["Ohio St."],
+    "Penn State": ["Penn St."],
+    "Oklahoma State": ["Oklahoma St."],
+    "Kansas State": ["Kansas St."],
+    "Arizona State": ["Arizona St."],
+    "Texas A&M": ["Texas AM", "Texas A and M"],
+    "UCF": ["Central Florida"],
+    "USC": ["Southern California"],
+    "BYU": ["Brigham Young"],
+    "TCU": ["Texas Christian"],
+    "LSU": ["Louisiana State"],
+    "Georgia Tech": ["Ga. Tech"],
+    "Wake Forest": ["Wake"]
+  }
+}

@@ -38,6 +38,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--f-body); }
 a { color: var(--link); text-decoration: none; }
@@ -54,15 +55,15 @@ h3 { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spac
 
 /* Top bar */
 .topbar { background: var(--maroon); color: var(--maroon-ink); position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; border-bottom: 3px solid var(--gold); }
-.topbar-in { display: flex; align-items: center; gap: 16px; min-height: 58px; flex-wrap: wrap; padding-block: 6px; }
-.brand { display: flex; align-items: baseline; font-family: var(--f-display); font-size: 1.75rem; font-weight: 800; letter-spacing: .01em; text-transform: uppercase; line-height: 1; color: #fff; }
+.topbar-in { display: flex; align-items: center; gap: 12px; min-height: 58px; flex-wrap: wrap; padding-block: 6px; }
+.brand { display: flex; align-items: baseline; font-family: var(--f-display); font-size: 1.6rem; font-weight: 800; letter-spacing: .01em; text-transform: uppercase; line-height: 1; color: #fff; }
 .brand:hover { text-decoration: none; }
 .brand-b { color: var(--gold); font-weight: 600; margin-left: 2px; }
 .nav { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; min-width: 0; }
-.nav a { color: rgba(255,255,255,.86); font-family: var(--f-display); font-weight: 600; font-size: .98rem; letter-spacing: .03em; text-transform: uppercase; padding: 6px 8px; border-radius: 4px; white-space: nowrap; }
+.nav a { color: rgba(255,255,255,.86); font-family: var(--f-display); font-weight: 600; font-size: .95rem; letter-spacing: .02em; text-transform: uppercase; padding: 6px 7px; border-radius: 4px; white-space: nowrap; }
 .nav a:hover { background: rgba(255,255,255,.1); text-decoration: none; }
 .nav a.on { color: #fff; background: var(--maroon-deep); box-shadow: inset 0 -2px 0 var(--gold); }
-.psearch { position: relative; width: 190px; max-width: 100%; }
+.psearch { position: relative; width: 160px; max-width: 100%; }
 .psearch input { width: 100%; border: 1px solid rgba(255,255,255,.3); background: rgba(0,0,0,.18); color: #fff; padding: 7px 10px; border-radius: 4px; font: inherit; font-size: .9rem; }
 .psearch input::placeholder { color: rgba(255,255,255,.65); }
 .psearch-list { position: absolute; right: 0; top: calc(100% + 4px); width: 280px; max-width: 90vw; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); max-height: 360px; overflow: auto; z-index: 30; }

@@ -97,6 +97,31 @@ GitHub's web uploader accepts files up to 25 MB each. Per-game TrackMan CSVs are
 under that. For a larger combined file, upload it as `.xlsx` (much smaller than CSV)
 or split it.
 
+## TruMedia (NCAA research and Power 4 percentiles)
+
+The site can pull every Division I player's season stats from TruMedia each Monday.
+This adds an **NCAA** research page and a **vs BC / vs Power 4** switch on every
+percentile panel. It is off until you turn it on, and nothing else on the site changes.
+
+1. **Add your credentials as secrets** (never put them in a file):
+   Settings → Secrets and variables → Actions → **New repository secret**, three times:
+   - `TRUMEDIA_USERNAME`: the email on your TruMedia account
+   - `TRUMEDIA_SITENAME`: the first part of your TruMedia URL (e.g. `bc` from `bc.trumedianetworks.com`)
+   - `TRUMEDIA_MASTER_TOKEN`: the master token from TruMedia (ncaasupport@trumedianetworks.com)
+2. **Turn it on:** edit `scripts/trumedia.json` and change `"enabled": false` to `"enabled": true`.
+   Committing that change runs the first pull.
+3. **Check the result** on the site's **Data status** page. It shows how many players
+   were pulled, any stat columns TruMedia didn't recognise, and any Power 4 teams whose
+   names didn't match. Fix those in `scripts/trumedia.json` (stat names come from your
+   TruMedia glossary page; team spellings go under `team_aliases`).
+
+After that it refreshes every Monday on its own. To refresh sooner, go to Actions →
+Build and publish BirdballSavant → Run workflow. Setting `"enabled"` back to `false`
+removes all TruMedia data from the site on the next build.
+
+**Before turning it on, read Privacy below.** TruMedia data is licensed to BC; on a
+public site anyone could view and download it.
+
 ## Privacy
 
 GitHub Pages on a free account requires a **public** repository, which means anyone

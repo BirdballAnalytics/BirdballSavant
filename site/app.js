@@ -65,6 +65,7 @@ async function loadMeta() {
   const saved = ls.get('season', null);
   const ids = S.meta.seasons.map(s => s.id);
   S.season = ids.includes(saved) ? saved : ids[ids.length - 1];
+  const nn = $('#nav-ncaa'); if (nn) nn.hidden = !(S.meta.ncaa?.years || []).length;
   const fb = $('#foot-built');
   if (fb && S.meta.built) fb.textContent = 'Data updated ' + new Date(S.meta.built).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
@@ -314,6 +315,7 @@ function table(id, cols, data, opts = {}) {
       });
     }
     const head = cols.map(c => `<th data-k="${c.k}" class="${c.l ? 'l ' : ''}${opts.nosort ? 'nosort ' : ''}${st.k === c.k ? 'sorted ' + (st.asc ? 'asc' : '') : ''}" ${c.tip ? `title="${esc(c.tip)}"` : ''} scope="col">${esc(c.label)}</th>`).join('');
+    if (opts.limit) rows = rows.slice(0, opts.limit);
     const body = rows.map(r => `<tr class="${r._cls || ''}">${cols.map(c => {
       const v = c.get ? c.get(r) : r[c.k];
       const html = c.html ? c.html(r) : (c.fmt ? c.fmt(v) : F.str(v));
@@ -400,14 +402,17 @@ const PIT_PCT = [
   ['Barrel %', 'brlPct', -1, F.pct], ['Hard-Hit %', 'hhPct', -1, F.pct], ['GB %', 'gbPct', 1, F.pct], ['Extension', 'ext', 1, F.f1], ['Fastball Spin', 'fbSpin', 1, F.int],
 ];
 
-function pctBars(defs, me, pool) {
+function pctBars(defs, me, pool, alt) {
   const rows = defs.map(([lab, k, dir, fmt]) => {
     const v = me[k];
-    const p = percentile(v, pool.map(o => o[k]), dir);
-    if (p == null) return `<div class="pct-row na"><span class="lab">${lab}</span><div class="pct-track"></div><span class="val">—</span></div>`;
+    const altVals = alt && alt.values(k);
+    const useAlt = altVals && altVals.length;
+    const p = percentile(v, useAlt ? altVals : pool.map(o => o[k]), dir);
+    const tag = alt && !useAlt ? ' <span class="muted small" title="Not available from TruMedia, ranked against BC">BC</span>' : '';
+    if (p == null) return `<div class="pct-row na"><span class="lab">${lab}${tag}</span><div class="pct-track"></div><span class="val">—</span></div>`;
     const col = pctColor(p);
-    return `<div class="pct-row${me.q ? '' : ' nq'}" title="${esc(lab)}: ${esc(fmt(v))} — ${p}th percentile among qualified BC players">
-      <span class="lab">${lab}</span>
+    return `<div class="pct-row${me.q ? '' : ' nq'}" title="${esc(lab)}: ${esc(fmt(v))} — ${p}th percentile among ${useAlt ? 'qualified Power 4 players' : 'qualified BC players'}">
+      <span class="lab">${lab}${tag}</span>
       <div class="pct-track"><span class="pct-tick" style="left:50%"></span><span class="pct-fill" style="width:${p}%;background:${col}"></span><span class="pct-bub" style="left:${p}%;background:${col}">${p}</span></div>
       <span class="val">${fmt(v)}</span></div>`;
   }).join('');
@@ -900,6 +905,122 @@ async function pageGame(sid, gi) {
     ${table('t-gbb', [nameCol, { k: 'team', label: 'Team', l: true, fmt: v => esc(isBC(v) ? 'BC' : teamName(v)) }, { k: 'inn', label: 'Inn', fmt: F.int }, { k: 'ev', label: 'EV', fmt: F.f1 }, { k: 'la', label: 'LA', fmt: F.f1 }, { k: 'dist', label: 'Dist', fmt: F.int }, { k: 'r', label: 'Result', l: true, html: r => resBadge(r.r) }, { k: 'pit', label: 'Pitcher', l: true, html: r => plink(r.pit), get: r => pname(r.pit) }], bb, { sort: 'ev' })}</section>`;
 }
 
+/* ---------- TruMedia / NCAA ---------- */
+const LOWER_BETTER = new Set(['K%', 'Chase%', 'Whiff%', 'InZoneWhiff%', 'ERA', 'FIP', 'WHIP', 'BB/9', 'BB%|PIT', 'BA|PIT', 'OBP|PIT', 'SLG|PIT', 'wOBA|PIT', 'xwOBA|PIT', 'xBA|PIT', 'ExitVel|PIT', 'HardHit%|PIT', 'Barrel%|PIT']);
+const AVG_STATS = new Set(['AVG', 'OBP', 'SLG', 'OPS', 'ISO', 'BABIP', 'wOBA', 'xwOBA', 'xBA', 'xSLG']);
+function ncaaFmt(col, v) {
+  if (v == null || !isFinite(v)) return '—';
+  const base = col.replace('|PIT', '');
+  if (col.includes('%')) return (v * 100).toFixed(1);
+  if (AVG_STATS.has(base) || base === 'BA') return F.avg(v);
+  if (['ERA', 'FIP', 'WHIP', 'K/9', 'BB/9'].includes(base)) return v.toFixed(2);
+  if (base === 'IP') return v.toFixed(1);
+  if (/Spin/.test(base)) return F.int(v);
+  if (/Vel|Ang|Extension|BatSpeed/.test(base)) return v.toFixed(1);
+  return Number.isInteger(v) ? F.int(v) : v.toFixed(1);
+}
+async function loadNcaa(year) {
+  S.ncaa = S.ncaa || {};
+  if (S.ncaa[year]) return S.ncaa[year];
+  const m = (S.meta.ncaa?.years || []).find(y => y.year === year);
+  if (!m) return null;
+  const j = await getJSON('data/' + m.file);
+  for (const side of ['hitting', 'pitching']) {
+    const d = j[side]; if (!d) continue;
+    const pctCols = d.stats.filter(c => c.includes('%'));
+    const max = {}; for (const c of pctCols) max[c] = 0;
+    d.list = d.rows.map(r => {
+      const o = {}; d.fields.forEach((f, i) => o[f] = r[i]);
+      d.stats.forEach((c, i) => { o[c] = r[d.fields.length + i]; });
+      for (const c of pctCols) if (o[c] != null) max[c] = Math.max(max[c], Math.abs(o[c]));
+      return o;
+    });
+    // TruMedia may send percentages as 25.3 or 0.253; store fractions
+    for (const c of pctCols) if (max[c] > 1.5) d.list.forEach(o => { if (o[c] != null) o[c] = o[c] / 100; });
+    const q = j.qualify || {};
+    d.qual = o => side === 'hitting' ? (o.PA ?? 0) >= (q.hitting_PA ?? 100) : (o.IP ?? 0) >= (q.pitching_IP ?? 25);
+  }
+  S.ncaa[year] = j;
+  return j;
+}
+function ncaaYearFor(seasonId) {
+  const ys = (S.meta.ncaa?.years || []).map(y => y.year).sort((a, b) => a - b);
+  if (!ys.length) return null;
+  const want = parseInt(seasonId, 10);
+  return ys.includes(want) ? want : (ys.filter(y => y <= want).pop() ?? ys[ys.length - 1]);
+}
+async function p4Alt(seasonId, side) {
+  const year = ncaaYearFor(seasonId); if (year == null) return null;
+  const j = await loadNcaa(year); const d = j?.[side]; if (!d) return null;
+  const map = j.percentile_map?.[side] || {};
+  const pool = d.list.filter(o => o.p4 && d.qual(o));
+  return { year, n: pool.length, values: k => { const c = map[k]; return c && d.stats.includes(c) ? pool.map(o => o[c]).filter(v => v != null) : null; } };
+}
+
+async function pageNcaa() {
+  setNav('ncaa');
+  const years = (S.meta.ncaa?.years || []).map(y => y.year).sort((a, b) => b - a);
+  if (!years.length) { app.innerHTML = '<p class="empty">TruMedia data has not been pulled yet. See the Data status page.</p>'; return; }
+  const ui = S.ui.ncaa || (S.ui.ncaa = { year: years[0], side: 'hitting', scope: 'p4', team: '', q: '', min: null });
+  if (!years.includes(ui.year)) ui.year = years[0];
+  const j = await loadNcaa(ui.year), d = j[ui.side];
+  const opt = (arr, v) => arr.map(([k, l]) => `<option value="${esc(k)}" ${String(v) === String(k) ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  const p4confs = [...new Set((d?.list || []).filter(o => o.p4).map(o => o.conf).filter(Boolean))].sort();
+  const minKey = ui.side === 'hitting' ? 'PA' : 'IP';
+  const minDef = ui.side === 'hitting' ? (j.qualify?.hitting_PA ?? 100) : (j.qualify?.pitching_IP ?? 25);
+  const min = ui.min ?? minDef;
+  const inScope = o => ui.scope === 'all' ? true : ui.scope === 'p4' ? o.p4 : (o.conf === ui.scope);
+  const teams = [...new Set((d?.list || []).filter(inScope).map(o => o.team))].sort();
+  const q = ui.q.trim().toLowerCase();
+  const rows = (d?.list || []).filter(o => inScope(o) && (!ui.team || o.team === ui.team) && (!q || o.name.toLowerCase().includes(q)) && (o[minKey] ?? 0) >= min);
+  const statCols = (d?.stats || []).map(c => ({ k: c, label: c.replace('|PIT', ''), fmt: v => ncaaFmt(c, v), asc: LOWER_BETTER.has(c) }));
+  const tid = `t-ncaa-${ui.side}`;
+  if (!S.sort[tid]) S.sort[tid] = { k: ui.side === 'hitting' ? (d?.stats.includes('OPS') ? 'OPS' : 'PA') : (d?.stats.includes('IP') ? 'IP' : d?.stats[0]), asc: false };
+  app.innerHTML = `
+  <div class="phead"><div><span class="eyebrow">TruMedia · NCAA Division I · ${ui.year}</span><h1>NCAA Research</h1></div>
+    <div class="controls"><label for="nc-year">Season</label><select id="nc-year">${opt(years.map(y => [y, y]), ui.year)}</select></div></div>
+  <div class="controls">${segmented('nc-side', [['hitting', 'Hitters'], ['pitching', 'Pitchers']], ui.side, v => { ui.side = v; ui.team = ''; ui.min = null; route(); })}
+    <label for="nc-scope">Scope</label><select id="nc-scope">${opt([['p4', 'Power 4'], ['all', 'All D1'], ...p4confs.map(c => [c, c])], ui.scope)}</select>
+    <label for="nc-team">Team</label><select id="nc-team"><option value="">All teams</option>${opt(teams.map(t => [t, t]), ui.team)}</select>
+    <label for="nc-q">Player</label><input id="nc-q" type="search" placeholder="Search name" value="${esc(ui.q)}" style="width:150px">
+    <label for="nc-min">Min ${minKey}</label><input id="nc-min" type="number" min="0" value="${min}"></div>
+  <span class="muted small">${F.int(rows.length)} players${rows.length > 500 ? ' · showing the top 500 for the current sort' : ''} · pulled ${esc(new Date(j.pulled).toLocaleDateString())}</span>
+  ${table(tid, [{ k: 'name', label: 'Player', l: true, get: r => r.name, html: r => `<a href="#ncaa-p-${ui.year}-${ui.side}-${encodeURIComponent(r.id || r.name).replace(/%/g, '~')}">${esc(r.name)}</a>` },
+    { k: 'team', label: 'Team', l: true, asc: true }, { k: 'pos', label: 'Pos', l: true, asc: true }, ...statCols], rows, { limit: 500 })}`;
+  $('#nc-year').onchange = e => { ui.year = +e.target.value; route(); };
+  $('#nc-scope').onchange = e => { ui.scope = e.target.value; ui.team = ''; route(); };
+  $('#nc-team').onchange = e => { ui.team = e.target.value; route(); };
+  $('#nc-min').onchange = e => { ui.min = Math.max(0, +e.target.value || 0); route(); };
+  let t; $('#nc-q').oninput = e => { clearTimeout(t); t = setTimeout(() => { ui.q = e.target.value; route().then(() => { const el = $('#nc-q'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); }, 250); };
+}
+
+async function pageNcaaPlayer(year, side, rawId) {
+  setNav('ncaa');
+  const id = decodeURIComponent(rawId.replace(/~/g, '%'));
+  const j = await loadNcaa(year); const d = j?.[side];
+  const o = d?.list.find(x => (x.id || x.name) === id);
+  if (!o) { app.innerHTML = '<p class="err">Player not found in the TruMedia data.</p>'; return; }
+  const map = j.percentile_map?.[side] || {};
+  const pool = d.list.filter(x => x.p4 && d.qual(x));
+  const defs = (side === 'hitting' ? HIT_PCT : PIT_PCT).filter(df => map[df[1]] && d.stats.includes(map[df[1]]))
+    .map(([lab, k, dir, fmt]) => [lab, map[k], dir, v => ncaaFmt(map[k], v)]);
+  const me = { ...o, q: d.qual(o) };
+  const other = side === 'hitting' ? 'pitching' : 'hitting';
+  const twoWay = j[other]?.list.find(x => (x.id || x.name) === id);
+  app.innerHTML = `
+  <div class="player-head"><div>
+    <span class="eyebrow">${esc(o.team)}${o.conf ? ' · ' + esc(o.conf) : ''} · ${year} · TruMedia</span>
+    <h1>${esc(o.name)}</h1>
+    <div class="bio">${o.pos ? `<span><b>${esc(o.pos)}</b></span>` : ''}${o.hand ? `<span>${side === 'hitting' ? 'Bats' : 'Throws'} <b>${esc(o.hand)}</b></span>` : ''}<span>${o.p4 ? 'Power 4' : 'Division I'}</span></div>
+  </div><div class="controls">${twoWay ? `<a class="btn" href="#ncaa-p-${year}-${other}-${encodeURIComponent(id).replace(/%/g, '~')}">${other === 'pitching' ? 'Pitching' : 'Hitting'} card</a>` : ''}<a class="btn" href="#ncaa">Back to research</a></div></div>
+  <section class="grid-pp">
+    <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2><span class="note">vs ${pool.length} qualified Power 4 ${side === 'hitting' ? 'hitters' : 'pitchers'}, ${year}${me.q ? '' : ' · below the qualifying minimum, shown faded'}</span></div>
+      ${defs.length ? pctBars(defs.map(df => [df[0], df[1], df[2], df[3]]), me, pool) : '<p class="empty">No percentile stats available for this player.</p>'}</div>
+    <div class="panel"><div class="panel-h"><h2>${year} season</h2></div>
+      <dl class="gloss" style="grid-template-columns:minmax(90px,140px) minmax(0,1fr)">${d.stats.map(c => `<dt>${esc(c.replace('|PIT', ''))}</dt><dd style="color:var(--ink)">${ncaaFmt(c, o[c])}</dd>`).join('')}</dl></div>
+  </section>`;
+}
+
 /* ---------- player page ---------- */
 async function pagePlayer(key) {
   setNav('');
@@ -928,12 +1049,22 @@ async function pagePlayer(key) {
     <div class="controls">${both ? segmented('pl-role', [['hit', 'Hitting'], ['pit', 'Pitching']], role, v => { ui.role = v; route(); }) : ''}
       ${seasons.length ? `<label for="pl-season">Season</label>${seasonSelect('pl-season', v => { ui.season = v; route(); }, seasons)}` : ''}</div></div>`;
   if (!seasons.length) { app.innerHTML = head + '<p class="empty">No tracked data yet.</p>'; return; }
-  app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui) : pitcherBody(i, p, pitS, ui));
+  const hasNcaa = (S.meta.ncaa?.years || []).length > 0;
+  if (hasNcaa && !S.pctPool) S.pctPool = ls.get('pctPool', 'p4');
+  const alt = hasNcaa && S.pctPool === 'p4' ? await p4Alt(ui.season, role === 'hit' ? 'hitting' : 'pitching') : null;
+  app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa));
   const sel = $('#pl-season'); if (sel) sel.value = ui.season;
   bindPlayer(i, p, role, ui);
 }
 
-function hitterBody(i, p, seasons, ui) {
+function poolSwitch(hasNcaa) {
+  if (!hasNcaa) return '';
+  return segmented('pool-sw', [['bc', 'vs BC'], ['p4', 'vs Power 4']], S.pctPool, v => { S.pctPool = v; ls.set('pctPool', v); route(); });
+}
+function poolNote(alt, T, pool, unit, meRow) {
+  return alt ? `vs ${alt.n} qualified Power 4 ${unit === 'PA' ? 'hitters' : 'pitchers'} (TruMedia ${alt.year})` : `vs ${pool.length} qualified BC ${unit === 'PA' ? 'hitters' : 'pitchers'} (${T.q}+ ${unit})${meRow.q ? '' : ' · below qualifying ' + unit + ', shown faded'}`;
+}
+function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   const se = S.seasons[ui.season], rows = se.byH.get(i) || [], me = stats(rows);
   const T = seasonHitters(se), meRow = T.rows.find(o => o.i === i) || { ...me, q: false };
   const pool = T.rows.filter(o => o.q);
@@ -949,8 +1080,9 @@ function hitterBody(i, p, seasons, ui) {
   const glog = gameLog(rows, se, 'h');
   return `
   <section class="grid-pp">
-    <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2><span class="note">${esc(se.label)} · vs ${pool.length} qualified BC hitters (${T.q}+ PA)${meRow.q ? '' : ' · below qualifying PA, shown faded'}</span></div>
-      ${pctBars(HIT_PCT.filter(d => d[1] !== 'batSpd' || pool.some(o => o.batSpd != null)), meRow, pool)}</div>
+    <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2>${poolSwitch(hasNcaa)}</div>
+      <p class="muted small" style="margin:-4px 0 10px">${esc(se.label)} · ${poolNote(alt, T, pool, 'PA', meRow)}</p>
+      ${pctBars(HIT_PCT.filter(d => d[1] !== 'batSpd' || pool.some(o => o.batSpd != null)), meRow, pool, alt)}</div>
     <div class="panel"><div class="panel-h"><h2>Spray chart</h2><span class="note">${esc(se.label)}</span></div><div class="chart-box">${sprayChart(rows)}</div></div>
   </section>
   <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
@@ -985,7 +1117,7 @@ function playerExecution(i, se, me) {
     </tbody></table></div></section>`;
 }
 
-function pitcherBody(i, p, seasons, ui) {
+function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
   const se = S.seasons[ui.season], rows = se.byP.get(i) || [];
   const T = seasonPitchers(se), meRow = T.rows.find(o => o.i === i) || { ...stats(rows), ...pitchShape(rows), q: false };
   const pool = T.rows.filter(o => o.q);
@@ -1002,8 +1134,9 @@ function pitcherBody(i, p, seasons, ui) {
   const tot = rows.length;
   return `
   <section class="grid-pp">
-    <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2><span class="note">${esc(se.label)} · vs ${pool.length} qualified BC pitchers (${T.q}+ BF)${meRow.q ? '' : ' · below qualifying BF, shown faded'}</span></div>
-      ${pctBars(PIT_PCT, meRow, pool)}</div>
+    <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2>${poolSwitch(hasNcaa)}</div>
+      <p class="muted small" style="margin:-4px 0 10px">${esc(se.label)} · ${poolNote(alt, T, pool, 'BF', meRow)}</p>
+      ${pctBars(PIT_PCT, meRow, pool, alt)}</div>
     <div class="panel"><div class="panel-h"><h2>Movement profile</h2><span class="note">${F.int(tot)} pitches · large dots = averages</span></div>
       <div class="chart-box" id="mvbox">${movementChart(rows, ui.active)}</div>
       ${ptChips('pt-chips', types, ui.active, () => redrawPitcherCharts(rows, ui))}</div>
@@ -1156,6 +1289,7 @@ function pageGlossary() {
     ['2K Win %', 'Share of plate appearances that reached two strikes and did not end in a strikeout (a hit, walk, HBP or ball in play all count as wins). Uses TrackMan and results-only games.'],
     ['Execution', 'Hit-and-run, stolen bases, bunting, 3-2 and the other categories on the Execution tab come straight from the coaching staff\'s weekly execution chart, matched to players by jersey number. Green means the player or team is at or above the staff goal for that category; red means below it.'],
     ['Data corrections', 'A few TrackMan tagging mistakes confirmed by the staff are fixed during every build (listed on the Data status page and in scripts/corrections.json).'],
+    ['Power 4 percentiles', 'When TruMedia data is loaded, percentile bars can rank a BC player against every qualified hitter or pitcher in the ACC, SEC, Big Ten and Big 12 for that season (TruMedia season stats; fall data is compared with the most recent spring). The BC player\'s own numbers still come from this site\'s TrackMan data. Stats TruMedia doesn\'t provide are ranked against BC and marked BC.'],
     ['Seasons', 'Games from January–July are grouped as Spring; August–December as Fall. Fall data includes intrasquad scrimmages.'],
   ];
   app.innerHTML = `<div class="phead"><div><span class="eyebrow">Reference</span><h1>Glossary</h1></div></div>
@@ -1179,6 +1313,10 @@ function pageData() {
         if (r.unread && r.unread.length) bits.push('Could not read: ' + r.unread.map(esc).join(', '));
         return `<span style="white-space:normal">${bits.join(' · ')}</span>`;
       } }], m.files, { nosort: true })}</section>
+  ${m.ncaa?.report ? `<section class="panel"><div class="panel-h"><h2>TruMedia</h2><span class="note">Last run ${esc(new Date(m.ncaa.report.ran).toLocaleString())}</span></div>
+    <p style="margin:0 0 10px"><b>${esc(m.ncaa.report.status)}</b></p>
+    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}</p>`).join('')}
+  </section>` : ''}
   ${(m.corrections || []).length ? `<section class="panel"><div class="panel-h"><h2>TrackMan corrections</h2><span class="note">From scripts/corrections.json</span></div>
     ${table('t-corr', [{ k: 'batter', label: 'Batter', l: true }, { k: 'date', label: 'Date', l: true, fmt: v => esc(fmtDate(v, true)) }, { k: 'pitchno', label: 'Pitch #', fmt: F.int }, { k: 'note', label: 'Fix', l: true, html: r => `<span style="white-space:normal">${esc(r.note || '')}</span>` }, { k: 'applied', label: 'Status', l: true, fmt: v => v ? 'Applied' : 'Pitch not found' }], m.corrections, { nosort: true })}</section>` : ''}
   <section class="panel prose" style="max-width:none"><h2 style="margin-bottom:8px">Adding new games</h2>
@@ -1224,6 +1362,8 @@ async function route() {
     else if (h.startsWith('game-')) { const m = h.match(/^game-(.+)-(\d+)$/); if (m) await pageGame(m[1], +m[2]); }
     else if (h.startsWith('player-')) await pagePlayer(h.slice(7));
     else if (h === 'search') await pageSearch();
+    else if (h === 'ncaa') await pageNcaa();
+    else if (h.startsWith('ncaa-p-')) { const m = h.match(/^ncaa-p-(\d{4})-(hitting|pitching)-(.+)$/); if (m) await pageNcaaPlayer(+m[1], m[2], m[3]); }
     else if (h === 'glossary') pageGlossary();
     else if (h === 'data') pageData();
     else await pageHome();
