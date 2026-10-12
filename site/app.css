@@ -231,3 +231,7 @@ dl.gloss dd { margin: 0; color: var(--muted); }
 .filters select, .filters input { width: 100%; }
 .empty { color: var(--muted); padding: 16px 0; }
 @media (prefers-reduced-motion: no-preference) { .pct-bub { transition: left .3s ease; } }
+
+.jersey { color: var(--gold); margin-right: .25em; font-weight: 700; }
+.ex.ok { color: var(--good); }
+.ex.bad { color: var(--pct-hi); }

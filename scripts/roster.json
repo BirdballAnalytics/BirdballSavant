@@ -1,0 +1,466 @@
+{
+ "_note": "BC roster: jersey number, name and bio. Used to match execution charts (by number) and for player pages. Replace when the roster changes.",
+ "season": "2027 (Fall 2026 + Spring 2027)",
+ "players": [
+  {
+   "num": 0,
+   "name": "Will Matuszak",
+   "class": "Jr.",
+   "pos": "INF",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 165,
+   "home": "Los Angeles, Calif. / Winward"
+  },
+  {
+   "num": 1,
+   "name": "Sean Martinez",
+   "class": "Jr.",
+   "pos": "INF",
+   "bt": "R/R",
+   "ht": "5' 11\"",
+   "wt": 175,
+   "home": "Perkasie, Pa. / Lansdale Catholic HS"
+  },
+  {
+   "num": 2,
+   "name": "Ty Mainolfi",
+   "class": "Jr.",
+   "pos": "INF",
+   "bt": "L/R",
+   "ht": "6' 2\"",
+   "wt": 185,
+   "home": "Staten Island, N.Y. / St. Peter's Boys High School"
+  },
+  {
+   "num": 4,
+   "name": "Charlie Comella",
+   "class": "Jr.",
+   "pos": "OF",
+   "bt": "L/L",
+   "ht": "6' 1\"",
+   "wt": 189,
+   "home": "Wellesley, Mass. / Xaverian Brothers"
+  },
+  {
+   "num": 5,
+   "name": "Chase Massey",
+   "class": "Fr.",
+   "pos": "INF",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 180,
+   "home": "Parker, Colo. / Regis Jesuit High School"
+  },
+  {
+   "num": 6,
+   "name": "Patrick Connors",
+   "class": "Fr.",
+   "pos": "OF",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 185,
+   "home": "Chicago, Ill. / Hinsdale Central High School"
+  },
+  {
+   "num": 7,
+   "name": "Esteban Garcia",
+   "class": "Sr.",
+   "pos": "INF",
+   "bt": "L/R",
+   "ht": "6' 2\"",
+   "wt": 200,
+   "home": "Queens, N.Y. / Poly Prep Country Day"
+  },
+  {
+   "num": 9,
+   "name": "Gabe Malaret",
+   "class": "So.",
+   "pos": "OF",
+   "bt": "S/R",
+   "ht": "6' 1\"",
+   "wt": 190,
+   "home": "Boston, Mass. / Dexter Southfield"
+  },
+  {
+   "num": 10,
+   "name": "Colin Larson",
+   "class": "Jr.",
+   "pos": "OF",
+   "bt": "L/L",
+   "ht": "5' 9\"",
+   "wt": 185,
+   "home": "Easthampton, Mass. / Williston Northampton School"
+  },
+  {
+   "num": 11,
+   "name": "Collin Haug",
+   "class": "Fr.",
+   "pos": "OF",
+   "bt": "R/R",
+   "ht": "5' 11\"",
+   "wt": 185,
+   "home": "Islip, N.Y. / Islip High School"
+  },
+  {
+   "num": 12,
+   "name": "Matt Kouser",
+   "class": "Jr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 6\"",
+   "wt": 230,
+   "home": "Haddonfield, N.J. / St. Augustine Prep"
+  },
+  {
+   "num": 14,
+   "name": "Luke Gallo",
+   "class": "So.",
+   "pos": "INF",
+   "bt": "R/R",
+   "ht": "5' 10\"",
+   "wt": 185,
+   "home": "Shrewsbury, Mass. / Phillips Academy"
+  },
+  {
+   "num": 15,
+   "name": "Nick Quagliato",
+   "class": "Jr.",
+   "pos": "C",
+   "bt": "R/R",
+   "ht": "5' 10\"",
+   "wt": 215,
+   "home": "Neptune, N.J. / Neptune"
+  },
+  {
+   "num": 16,
+   "name": "Julio Solier",
+   "class": "Jr.",
+   "pos": "INF",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 187,
+   "home": "Guayama, Puerto Rico / Springfield Central"
+  },
+  {
+   "num": 17,
+   "name": "Gavin Soares",
+   "class": "Jr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 3\"",
+   "wt": 220,
+   "home": "Ho-Ho-Kus, N.J. / Northern Highlands"
+  },
+  {
+   "num": 18,
+   "name": "Max Goldberg",
+   "class": "Fr.",
+   "pos": "LHP",
+   "bt": "L/L",
+   "ht": "6' 2\"",
+   "wt": 190,
+   "home": "Englewood, Colo. / Cherry Creek High School"
+  },
+  {
+   "num": 19,
+   "name": "Ben Williams",
+   "class": "Jr.",
+   "pos": "OF",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 190,
+   "home": "Hanover, N.H. / Hanover/Avon Old Farms"
+  },
+  {
+   "num": 20,
+   "name": "Luke Hewes",
+   "class": "Jr.",
+   "pos": "C",
+   "bt": "R/R",
+   "ht": "6' 1\"",
+   "wt": 205,
+   "home": "Flagstaff, Ariz. / Flagstaff High School"
+  },
+  {
+   "num": 21,
+   "name": "Champ Davis",
+   "class": "Gr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 1\"",
+   "wt": 180,
+   "home": "Atlanta, Ga. / Marist School"
+  },
+  {
+   "num": 22,
+   "name": "Easton Masse",
+   "class": "So.",
+   "pos": "C",
+   "bt": "R/R",
+   "ht": "5' 11\"",
+   "wt": 190,
+   "home": "Manchester, Conn. / Westminster School"
+  },
+  {
+   "num": 23,
+   "name": "Brady Miller",
+   "class": "Jr.",
+   "pos": "LHP",
+   "bt": "R/L",
+   "ht": "6' 5\"",
+   "wt": 210,
+   "home": "Harwich, Mass. / Belmont Hill"
+  },
+  {
+   "num": 24,
+   "name": "Cesar Gonzalez",
+   "class": "Jr.",
+   "pos": "C/RHP",
+   "bt": "R/R",
+   "ht": "5' 9\"",
+   "wt": 185,
+   "home": "Maracaibo, Venezuela / Springfield Commonwealth"
+  },
+  {
+   "num": 25,
+   "name": "Chase Hartsell",
+   "class": "So.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 2\"",
+   "wt": 170,
+   "home": "Bridgewater, Mass. / Dexter Southfield"
+  },
+  {
+   "num": 26,
+   "name": "Jacob Burnham",
+   "class": "Jr.",
+   "pos": "LHP",
+   "bt": "R/L",
+   "ht": "6' 0\"",
+   "wt": 200,
+   "home": "Key West, Fla. / Key West High School"
+  },
+  {
+   "num": 27,
+   "name": "Matthew DeFilippo",
+   "class": "Fr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 3\"",
+   "wt": 185,
+   "home": "Farmington, Conn. / Avon Old Farms"
+  },
+  {
+   "num": 28,
+   "name": "Zach Fronio",
+   "class": "So.",
+   "pos": "LHP",
+   "bt": "R/L",
+   "ht": "6' 4\"",
+   "wt": 215,
+   "home": "Annandale, N.J. / North Hunterdon Regional High School"
+  },
+  {
+   "num": 30,
+   "name": "Ben Cherico",
+   "class": "Gr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 4\"",
+   "wt": 215,
+   "home": "Ridgefield, Conn. / Ridgefield"
+  },
+  {
+   "num": 31,
+   "name": "JJ Drennan",
+   "class": "Fr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 2\"",
+   "wt": 195,
+   "home": "Harrison, N.J. / Seton Hall Preparatory"
+  },
+  {
+   "num": 32,
+   "name": "Luke Hillegass",
+   "class": "Fr.",
+   "pos": "LHP",
+   "bt": "R/L",
+   "ht": "6' 5\"",
+   "wt": 215,
+   "home": "Warrington, Pa. / Central Bucks-South High School"
+  },
+  {
+   "num": 33,
+   "name": "Logan Berenson",
+   "class": "So.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 3\"",
+   "wt": 190,
+   "home": "Valley Village, Calif. / Notre Dame High School"
+  },
+  {
+   "num": 34,
+   "name": "Luke D'Ancona",
+   "class": "So.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 3\"",
+   "wt": 215,
+   "home": "Swarthmore, Pa. / Strath Haven High School"
+  },
+  {
+   "num": 35,
+   "name": "Joe Gold",
+   "class": "Sr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 190,
+   "home": "Ballston Spa, N.Y. / Christian Brothers Academy"
+  },
+  {
+   "num": 36,
+   "name": "Sean Budis",
+   "class": "So.",
+   "pos": "LHP",
+   "bt": "L/L",
+   "ht": "6' 4\"",
+   "wt": 200,
+   "home": "Kenilworth, N.J. / David Brearley High School"
+  },
+  {
+   "num": 37,
+   "name": "Asher Delue",
+   "class": "Fr.",
+   "pos": "LHP",
+   "bt": "L/L",
+   "ht": "6' 2\"",
+   "wt": 215,
+   "home": "Princeton, N.J. / The Hun School"
+  },
+  {
+   "num": 38,
+   "name": "Will Meehan",
+   "class": "Fr.",
+   "pos": "LHP",
+   "bt": "L/L",
+   "ht": "6' 3\"",
+   "wt": 190,
+   "home": "Hazlet, N.J. / Raritan High School"
+  },
+  {
+   "num": 40,
+   "name": "Ford McCarthy",
+   "class": "Fr.",
+   "pos": "OF",
+   "bt": "R/R",
+   "ht": "6' 1\"",
+   "wt": 200,
+   "home": "Jacksonville, Fla. / The Bolles School"
+  },
+  {
+   "num": 43,
+   "name": "Gus Gregory",
+   "class": "Gr.",
+   "pos": "OF",
+   "bt": "L/R",
+   "ht": "5' 10\"",
+   "wt": 180,
+   "home": "Strongsville, Ohio. / Strongsville High School"
+  },
+  {
+   "num": 44,
+   "name": "Aidan Spagna",
+   "class": "Fr.",
+   "pos": "C",
+   "bt": "R/R",
+   "ht": "6' 3\"",
+   "wt": 195,
+   "home": "Ashburn, Va. / Independence High School"
+  },
+  {
+   "num": 45,
+   "name": "Drew Grumbles",
+   "class": "Sr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 1\"",
+   "wt": 190,
+   "home": "Maumelle, Ark. / Episcopal Collegiate School"
+  },
+  {
+   "num": 46,
+   "name": "Kyle Kipp",
+   "class": "Sr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 2\"",
+   "wt": 200,
+   "home": "Stamford, Conn. / Westhill High School"
+  },
+  {
+   "num": 47,
+   "name": "Brodey Bitove",
+   "class": "Jr.",
+   "pos": "OF",
+   "bt": "L/R",
+   "ht": "6' 2\"",
+   "wt": 205,
+   "home": "Toronto, Ont. / The Benjamin School"
+  },
+  {
+   "num": 48,
+   "name": "Jeremy Sheffield",
+   "class": "Gr.",
+   "pos": "INF",
+   "bt": "R/R",
+   "ht": "6' 5\"",
+   "wt": 195,
+   "home": "Chesterfield, Mo. / Westminster Christian Academy"
+  },
+  {
+   "num": 49,
+   "name": "Brayden Ryan",
+   "class": "Gr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 6\"",
+   "wt": 235,
+   "home": "Salem, N.H. / Lawrence Academy"
+  },
+  {
+   "num": 50,
+   "name": "Jack Ryan",
+   "class": "Fr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 2\"",
+   "wt": 195,
+   "home": "Cincinnati, Ohio / St. Xavier High School"
+  },
+  {
+   "num": 54,
+   "name": "Ethan Marzo",
+   "class": "Jr.",
+   "pos": "RHP",
+   "bt": "R/R",
+   "ht": "6' 0\"",
+   "wt": 200,
+   "home": "Middletown, N.J. / Red Bank Catholic High School"
+  },
+  {
+   "num": 55,
+   "name": "Danny Surowiec",
+   "class": "Jr.",
+   "pos": "INF",
+   "bt": "L/R",
+   "ht": "6' 3\"",
+   "wt": 225,
+   "home": "West Chester, Pa. / West Chester Henderson"
+  }
+ ]
+}

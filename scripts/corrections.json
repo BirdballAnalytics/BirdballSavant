@@ -1,0 +1,8 @@
+{
+  "_note": "Confirmed fixes to TrackMan tagging. Each fix finds one pitch by batter + game date + PitchNo. \"pa\": \"\" removes the plate-appearance result on that pitch (the PA then ends on a later pitch, or not at all); any other value (OUT, 1B, BB...) replaces it.",
+  "fixes": [
+    {"batter": "Bitove, Brodey", "date": "2026-09-23", "pitchno": 51, "pa": "", "note": "Strikeout tagged on a 2-0 count; not a strikeout and not a plate appearance"},
+    {"batter": "Garcia, Esteban", "date": "2026-09-20", "pitchno": 69, "pa": "", "note": "Called K on 2-2, but the next pitch in the same PA is his double"},
+    {"batter": "Martinez, Sean", "date": "2026-09-18", "pitchno": 11, "pa": "OUT", "note": "Called K on 3-2 that the execution chart credits as a 3-2 win; real result unknown, counted as an out"}
+  ]
+}

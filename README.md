@@ -58,7 +58,8 @@ plate appearance with these columns:
 | Gallo, Luke | 0 | 0 | SAC F9 |
 
 - **Put the date and opponent in the file name**, e.g. `2026-09-26 URI Results.xlsx` or
-  `9.26.26vsURI.xlsx`. For a doubleheader add `Game 2`. (A `Date` or `Opponent` column
+  `9.26.26vsURI.xlsx`. For a road game put `@` (or `at`) before the opponent, e.g.
+  `2026-09-24_@URI_Results.xls`. For a doubleheader add `Game 2`. (A `Date` or `Opponent` column
   works too.) A file with no date is skipped.
 - **Results** use scorebook notation: `1B` `2B` `3B` `HR`, `K`/`KL`, `BB`, `HBP`,
   ground outs like `6-3` or `4-6-3`, `F8` (fly), `L9` (liner), `P5` (popup), `E6`,
@@ -71,6 +72,26 @@ plate appearance with these columns:
   can check it. To force a spelling, add it to `scripts/aliases.json`.
 - Don't upload a results file for a game that also has a TrackMan file, or those plate
   appearances will count twice.
+
+### Offensive execution chart (weekly)
+
+Each week, download the execution chart sheet as CSV (File → Download → .csv) and upload
+it to `data/`. The site reads the "Updated through" date at the top of the sheet, matches
+each jersey number to a player with `scripts/roster.json`, and shows it on the Hitting
+leaderboard's **Execution** tab and on each hitter's page. The `T` row is the team line and
+the `G` row is the staff goal. If an older chart for the same season is still in `data/`,
+the one with the newest "Updated through" date wins, so you can either replace the file or
+add a new one.
+
+**2K Win %** on that tab = plate appearances that reached two strikes and did not end in a
+strikeout, from TrackMan games plus results-only games.
+
+### Roster and corrections
+
+- `scripts/roster.json`: jersey numbers, positions, class and bio from the official roster.
+  Update it when the roster changes (new numbers are needed to match the execution chart).
+- `scripts/corrections.json`: confirmed TrackMan tagging mistakes (for example a strikeout
+  tagged on a 2-0 count). Each fix is applied on every build and listed on the Data status page.
 
 GitHub's web uploader accepts files up to 25 MB each. Per-game TrackMan CSVs are well
 under that. For a larger combined file, upload it as `.xlsx` (much smaller than CSV)

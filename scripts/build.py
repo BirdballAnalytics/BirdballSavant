@@ -27,6 +27,8 @@ DATA_DIR = ROOT / "data"
 OUT_DIR = ROOT / "site" / "data"
 TEAMS_FILE = Path(__file__).resolve().parent / "teams.json"
 ALIASES_FILE = Path(__file__).resolve().parent / "aliases.json"
+ROSTER_FILE = Path(__file__).resolve().parent / "roster.json"
+CORRECTIONS_FILE = Path(__file__).resolve().parent / "corrections.json"
 
 BC_CODES = {"BOC_EAG", "BOS_COL"}
 BC_CANON = "BOC_EAG"
@@ -102,6 +104,8 @@ def read_file(path: Path):
         df["_ncols"] = df.notna().sum(axis=1)
         df["_file"] = str(path.relative_to(ROOT))
         return "trackman", df
+    if looks_like_execution(df):
+        return "execution", df
     if result_col(df) and any(c.lower() == "batter" for c in df.columns):
         return "results", df
     return None, "not a TrackMan export or results file"
@@ -114,13 +118,25 @@ def load_all() -> tuple[pd.DataFrame, list[tuple[Path, pd.DataFrame]], list[dict
         and not p.name.startswith(("~$", "."))
     )
     log(f"Found {len(files)} data file(s) in data/")
-    frames, results, manifest = [], [], []
+    frames, results, manifest, executions = [], [], [], []
     for p in files:
         t = time.time()
         kind, df = read_file(p)
         if kind is None:
             log(f"  ! {p.name}: {df}, skipped")
             manifest.append({"file": p.name, "rows": 0, "kind": "", "status": f"skipped: {df}"})
+            continue
+        if kind == "execution":
+            ex = parse_execution(p)
+            if ex is None:
+                manifest.append({"file": p.name, "rows": 0, "kind": "Execution chart", "status": "skipped: could not find the chart's header row"})
+                log(f"  ! {p.name}: execution chart header not found, skipped")
+            else:
+                ex["file"] = p.name
+                executions.append(ex)
+                manifest.append({"file": p.name, "rows": len(ex["rows"]), "kind": "Execution chart", "status": "ok",
+                                 "updated": ex["updated"]})
+                log(f"  {p.name}: execution chart, {len(ex['rows'])} hitters, updated {ex['updated']}")
             continue
         if kind == "results":
             results.append((p, df))
@@ -131,7 +147,7 @@ def load_all() -> tuple[pd.DataFrame, list[tuple[Path, pd.DataFrame]], list[dict
         manifest.append({"file": p.name, "rows": int(len(df)), "kind": "TrackMan", "status": "ok"})
         frames.append(df)
     if not frames:
-        return pd.DataFrame(columns=USECOLS + ["_ncols", "_file"]), results, manifest
+        return pd.DataFrame(columns=USECOLS + ["_ncols", "_file"]), results, manifest, executions
     df = pd.concat(frames, ignore_index=True)
     df = df.replace({"": np.nan, "nan": np.nan, "NaN": np.nan, "Undefined": np.nan})
     df = df[df["Pitcher"].notna() & df["Batter"].notna()]
@@ -145,7 +161,150 @@ def load_all() -> tuple[pd.DataFrame, list[tuple[Path, pd.DataFrame]], list[dict
     before = len(df)
     df = df.sort_values("_ncols", ascending=False).drop_duplicates("_key", keep="first")
     log(f"Pitches: {before:,} read, {before-len(df):,} duplicates removed, {len(df):,} kept")
-    return df, results, manifest
+    return df, results, manifest, executions
+
+
+# ----------------------------------------------------------------------------
+# Offensive execution chart (coaching staff's sheet, cumulative, by jersey #)
+# ----------------------------------------------------------------------------
+EXEC_TOKENS = {"H&R", "SB2", "SB3", "3-2", "3<2", "SAC", "SQZ", "BFH"}
+
+
+def looks_like_execution(df):
+    cells = [str(c) for c in df.columns] + [str(v) for v in df.head(15).to_numpy().ravel()]
+    txt = " ".join(cells).lower()
+    return "execution" in txt or sum(c.strip() in EXEC_TOKENS for c in cells) >= 3
+
+
+def exec_key(label):
+    return re.sub(r"[^a-z0-9]+", "", label.lower().replace("<", "lt").replace("&", "n")) or "x"
+
+
+def parse_execution(path: Path):
+    try:
+        if path.suffix.lower() == ".csv":
+            g = pd.read_csv(path, header=None, dtype=str, keep_default_na=False)
+        else:
+            g = pd.read_excel(path, header=None, dtype=str, sheet_name=0).fillna("")
+    except Exception as e:
+        log(f"  ! {path.name}: could not read ({e})")
+        return None
+    g = g.astype(str).apply(lambda c: c.str.strip())
+    top = " ".join(g.head(12).to_numpy().ravel())
+    upd = None
+    m = re.search(r"updated\s*(?:through|thru)?:?\s*(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", top, re.I)
+    if m:
+        mo, da, y = map(int, m.groups())
+        y = y + 2000 if y < 100 else y
+        try:
+            upd = datetime(y, mo, da).date()
+        except ValueError:
+            upd = None
+    hi = None
+    for i in range(len(g)):
+        row = list(g.iloc[i])
+        if sum(v in EXEC_TOKENS for v in row) >= 3:
+            hi = i
+            break
+    if hi is None or hi + 1 >= len(g):
+        return None
+    hdr, sub = list(g.iloc[hi]), list(g.iloc[hi + 1])
+    cats = []
+    for j in range(1, len(hdr)):
+        if hdr[j] and hdr[j] != "#":
+            cats.append({"key": exec_key(hdr[j]), "label": hdr[j], "j": j,
+                         "a": sub[j] if j < len(sub) else "", "b": sub[j + 1] if j + 1 < len(sub) else ""})
+
+    def num(v):
+        v = str(v).replace("%", "").strip()
+        try:
+            return float(v)
+        except ValueError:
+            return None
+
+    players, team, goal = {}, None, {}
+    for i in range(hi + 2, len(g)):
+        first = g.iat[i, 0]
+        vals = {}
+        for c in cats:
+            j = c["j"]
+            e = num(g.iat[i, j]) if j < g.shape[1] else None
+            a = num(g.iat[i, j + 1]) if j + 1 < g.shape[1] else None
+            vals[c["key"]] = [e, a]
+        if first.upper() == "G":
+            for c in cats:
+                pc = num(g.iat[i, c["j"] + 2]) if c["j"] + 2 < g.shape[1] else None
+                if pc is not None:
+                    goal[c["key"]] = pc / 100 if pc > 1 else pc
+            continue
+        if first.upper() == "T":
+            team = {k: [v[0] or 0, v[1] or 0] for k, v in vals.items()}
+            continue
+        m = re.match(r"^\s*(\d+)", first)
+        if not m:
+            continue
+        n = int(m.group(1))
+        cur = players.setdefault(n, {"num": n, "label": first, "vals": {}})
+        for k, (e, a) in vals.items():
+            if e is None and a is None:
+                continue
+            pe, pa_ = cur["vals"].get(k, [0, 0])
+            cur["vals"][k] = [pe + (e or 0), pa_ + (a or 0)]
+    rows = [p for p in players.values() if p["vals"]]
+    if team is None:
+        team = {}
+        for c in cats:
+            team[c["key"]] = [sum(p["vals"].get(c["key"], [0, 0])[0] for p in rows),
+                              sum(p["vals"].get(c["key"], [0, 0])[1] for p in rows)]
+    title = re.search(r"(fall|spring)\s+(20\d{2})", top, re.I)
+    if upd:
+        sid, label = season_of(upd)
+    elif title:
+        y = int(title.group(2))
+        sid, label = f"{y}-{title.group(1).lower()}", f"{title.group(1).title()} {y}"
+    else:
+        return None
+    return {"season": sid, "label": label, "updated": upd.isoformat() if upd else None,
+            "cats": [{k: c[k] for k in ("key", "label", "a", "b")} for c in cats],
+            "rows": rows, "team": team, "goal": goal}
+
+
+def apply_corrections(df):
+    if not CORRECTIONS_FILE.exists():
+        return df, []
+    fixes = json.loads(CORRECTIONS_FILE.read_text()).get("fixes", [])
+    report = []
+    ds = df["gdate"].astype(str)
+    for f in fixes:
+        m = (df["Batter"] == f["batter"]) & (ds == f["date"]) & (df["PitchNo"] == f["pitchno"])
+        n = int(m.sum())
+        if n != 1:
+            log(f"  ! correction not applied ({n} matching pitches): {f['batter']} {f['date']} #{f['pitchno']}")
+            report.append({**f, "applied": False})
+            continue
+        df.loc[m, "pa"] = f.get("pa", "")
+        report.append({**f, "applied": True})
+        log(f"  correction applied: {f['batter']} {f['date']} pitch {f['pitchno']} -> {f.get('pa') or 'no PA result'}")
+    return df, report
+
+
+def flag_two_strikes(df):
+    """k2 = 1 on the pitch that ends a PA if the PA ever reached two strikes."""
+    df = df.sort_values(["GameID", "PitchNo"], kind="stable")
+    keys = list(zip(df["GameID"], df["Inning"].astype(str), df["Top/Bottom"].astype(str),
+                    df["PAofInning"].astype(str), df["Batter"]))
+    k2 = np.full(len(df), np.nan)
+    prev, mx = None, -1
+    for i, (key, s, pa) in enumerate(zip(keys, df["Strikes"], df["pa"])):
+        if key != prev:
+            prev, mx = key, -1
+        if s == s:
+            mx = max(mx, s)
+        if pa:
+            k2[i] = 1.0 if mx >= 2 else 0.0
+            mx = -1
+    df["k2"] = k2
+    return df
 
 
 # ----------------------------------------------------------------------------
@@ -173,6 +332,7 @@ def col(df, *names):
 
 def parse_filename(name: str):
     stem = Path(name).stem
+    away = "@" in stem or re.search(r"(?i)(?:^|[\s_\-.])at(?:[\s_\-.]|$)", stem) is not None
     d = None
     m = re.search(r"(20\d{2})[-_.](\d{1,2})[-_.](\d{1,2})", stem)
     if m:
@@ -200,7 +360,7 @@ def parse_filename(name: str):
     rest = re.sub(r"(?i)\b(results?|box|boxscore|vs|at|bc)\b", " ", rest)
     rest = re.sub(r"(?i)results?$", " ", rest.strip())
     opp = re.sub(r"\s+", " ", rest.replace("@", " ")).strip()
-    return d, opp, gnum
+    return d, opp, gnum, away
 
 
 def parse_result(txt: str):
@@ -263,7 +423,8 @@ def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
         return name, "new"
 
     for path, df in results:
-        fdate, fopp, gnum = parse_filename(path.name)
+        fdate, fopp, gnum, faway = parse_filename(path.name)
+        hac = col(df, "homeaway", "home/away", "site", "location")
         rc, bc_ = result_col(df), col(df, "batter")
         dc, oc = col(df, "date", "gamedate"), col(df, "opponent", "opp", "team")
         bcol, scol = col(df, "balls"), col(df, "strikes")
@@ -298,10 +459,12 @@ def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
                 "Pitcher": pitcher, "PitcherTeam": code, "PitcherThrows": {"R": "Right", "L": "Left"}.get(str(r[thcol]).strip()[:1].upper(), np.nan) if thcol else np.nan,
                 "Balls": num(r[bcol]) if bcol else np.nan, "Strikes": num(r[scol]) if scol else np.nan,
                 "Inning": num(r[icol]) if icol else np.nan,
-                "HomeTeam": BC_CANON, "AwayTeam": code, "Stadium": "", "pa": ev, "pt": "UN",
+                **(lambda away: {"HomeTeam": code if away else BC_CANON, "AwayTeam": BC_CANON if away else code})(
+                    str(r[hac]).strip().lower() in {"away", "a", "road", "@"} if hac and str(r[hac]).strip() else faway), "Stadium": "", "pa": ev, "pt": "UN",
                 "call": "X" if ev in {"1B", "2B", "3B", "HR", "OUT", "ROE", "FC", "SF", "SH"} else ("H" if ev == "HBP" else "U"),
                 "TaggedHitType": {"GB": "GroundBall", "LD": "LineDrive", "FB": "FlyBall", "PU": "Popup", "BU": "Bunt"}.get(ht, np.nan),
                 "OutsOnPlay": outs, "RunsScored": 0, "nt": 1,
+                "k2": (1.0 if num(r[scol]) == 2 else 0.0) if scol else np.nan,
             })
         gids = {x["GameID"] for x in file_rows}
         dup = gids & seen_games
@@ -487,19 +650,22 @@ def build():
     aliases = {}
     if ALIASES_FILE.exists():
         aliases = {k: v for k, v in json.loads(ALIASES_FILE.read_text()).items() if not k.startswith("_")}
-    df, results, manifest = load_all()
+    df, results, manifest, executions = load_all()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for old in OUT_DIR.glob("season-*.json"):
         old.unlink()
-    if df.empty and not results:
+    if df.empty and not results and not executions:
         (OUT_DIR / "meta.json").write_text(json.dumps({
             "built": datetime.now(timezone.utc).isoformat(), "seasons": [], "files": manifest,
             "teams": teams, "players": []}))
         log("No data yet; wrote empty meta.json")
         return
 
+    corr_report = []
     if not df.empty:
         df = clean(df)
+        df, corr_report = apply_corrections(df)
+        df = flag_two_strikes(df)
         df = fit_expected(df)
         for c in ("Batter", "Pitcher"):
             df[c] = df[c].replace(aliases)
@@ -566,6 +732,39 @@ def build():
         "th": hand(p["throws"], False), "b": hand(p["bats"], True),
         "hit": sorted(p["hit"]), "pit": sorted(p["pit"]),
     } for p in plist]
+
+    # Roster (jersey numbers, positions) matched to BC players by name
+    roster = json.loads(ROSTER_FILE.read_text()).get("players", []) if ROSTER_FILE.exists() else []
+    bc_players = [p for p in players_out if p["bc"]]
+
+    def find_bc(full):
+        first, _, last = full.strip().partition(" ")
+        last, first = last.lower().replace(" ", ""), first.lower()
+        cands = [p for p in bc_players if p["n"].split(",")[0].strip().lower().replace(" ", "") == last]
+        if len(cands) > 1:
+            cands = [p for p in cands if p["n"].partition(",")[2].strip().lower().startswith(first[:3])] or cands
+        if len(cands) > 1:
+            cands = [p for p in cands if p["n"].partition(",")[2].strip().lower() == first] or cands
+        return cands[0] if len(cands) == 1 else None
+
+    by_num = {}
+    for rp in roster:
+        p = find_bc(rp["name"])
+        if p:
+            p.update({"num": rp["num"], "pos": rp.get("pos"), "cls": rp.get("class"), "ht": rp.get("ht"),
+                      "wt": rp.get("wt"), "home": rp.get("home")})
+        by_num[rp["num"]] = {"name": rp["name"], "k": p["k"] if p else None}
+
+    execution = {}
+    for ex in sorted(executions, key=lambda e: (e["updated"] or "", e["file"])):
+        for row in ex["rows"]:
+            info = by_num.get(row["num"], {})
+            row["k"], row["name"] = info.get("k"), info.get("name") or row["label"]
+        execution[ex["season"]] = ex   # newest chart per season wins
+    for sid, ex in execution.items():
+        unknown = [r["label"] for r in ex["rows"] if r["k"] is None]
+        if unknown:
+            log(f"  execution chart {ex['label']}: numbers not matched to a player with data: {unknown}")
 
     seasons_meta = []
     for sid, sdf in df.groupby("season", sort=True):
@@ -636,6 +835,7 @@ def build():
             "xslg": [r(x, 3) for x in sdf["xslg"]],
             "xw": [r(x, 3) for x in sdf["xwv"]],
             "nt": [int(x) for x in sdf["nt"].fillna(0)],
+            "k2": [r(x, 0) for x in sdf["k2"]],
         }
         label = sdf["slabel"].iloc[0]
         fname = f"season-{sid}.json"
@@ -653,7 +853,7 @@ def build():
     meta = {
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seasons": seasons_meta, "files": manifest, "teams": teams,
-        "bc": BC_CANON, "players": players_out,
+        "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report,
         "weights": W,
     }
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
