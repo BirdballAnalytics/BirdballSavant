@@ -118,7 +118,8 @@ function stats(rows) {
   const t = { pitches: 0, PA: 0, AB: 0, H: 0, '1B': 0, '2B': 0, '3B': 0, HR: 0, BB: 0, HBP: 0, K: 0, SF: 0, SH: 0, ROE: 0, TB: 0,
     wsum: 0, xwsum: 0, xbasum: 0, xslgsum: 0, bbe: 0, evs: [], las: [], hh: 0, brl: 0, ss: 0, gb: 0, ld: 0, fb: 0, pu: 0, htN: 0,
     pull: 0, cent: 0, oppo: 0, dirN: 0, sw: 0, wh: 0, zn: 0, zsw: 0, zcon: 0, ozn: 0, osw: 0, ocon: 0, locN: 0, fpN: 0, fps: 0, fpk: 0, csw: 0,
-    bats: [], runs: 0, outs: 0, games: new Set(), dists: [], ntPA: 0, tAB: 0, tden: 0 };
+    bats: [], runs: 0, outs: 0, games: new Set(), dists: [], ntPA: 0, tAB: 0, tden: 0,
+    fast: 0, vats: [], ideal: 0, hats: [], sqN: 0, sq: 0, blast: 0 };
   for (const r of rows) {
     t.games.add(r.sid + ':' + r.g);
     const nt = r.nt === 1;
@@ -129,7 +130,16 @@ function stats(rows) {
     else if (r.iz === false) { t.ozn++; t.locN++; if (r.sw) { t.osw++; if (!r.wh) t.ocon++; } }
     if (r.ppa === 1) { t.fpN++; if (r.sw) t.fps++; if (r.c === 'C' || r.c === 'S' || r.c === 'F' || r.c === 'X') t.fpk++; }
     if (r.c === 'C' || r.c === 'S') t.csw++;
-    if (r.bat != null && r.bat >= 50 && r.sw) t.bats.push(r.bat);
+    if (r.bat != null && r.bat >= 50 && r.sw) {
+      t.bats.push(r.bat);
+      if (r.bat >= 75) t.fast++;
+      if (r.vat != null) { t.vats.push(r.vat); if (r.vat >= 5 && r.vat <= 20) t.ideal++; }
+      if (r.hat != null && r.bs) t.hats.push(r.bs === 'L' ? r.hat : -r.hat);
+      if (r.c === 'X' && r.ev != null && r.v != null && r.ht !== 'BU') {
+        const sqPct = r.ev / (1.23 * r.bat + 0.23 * r.v);
+        t.sqN++; if (sqPct >= 0.8) t.sq++; if (sqPct * 100 + r.bat >= 164) t.blast++;
+      }
+    }
     t.runs += r.rs || 0; t.outs += r.oop || 0; if (r.r === 'K' && !r.oop) t.outs++;
     }
     if (r.c === 'X' && r.ht !== 'BU') {
@@ -177,6 +187,11 @@ function stats(rows) {
     swing: d(t.sw, t.pitches), whiff: d(t.wh, t.sw), zone: d(t.zn, t.locN), zswing: d(t.zsw, t.zn), chase: d(t.osw, t.ozn),
     zcontact: d(t.zcon, t.zsw), contact: d(t.sw - t.wh, t.sw), fpSwing: d(t.fps, t.fpN), fpStrike: d(t.fpk, t.fpN), csw: d(t.csw, t.pitches),
     batSpd: t.bats.length >= 5 ? mean(t.bats) : null, maxBat: t.bats.length ? Math.max(...t.bats) : null, swingsTracked: t.bats.length,
+    batTop: t.bats.length >= 5 ? mean([...t.bats].sort((a, b) => b - a).slice(0, Math.max(1, Math.ceil(t.bats.length * 0.1)))) : null,
+    fastPct: t.bats.length >= 5 ? t.fast / t.bats.length : null,
+    attackAngle: t.vats.length >= 5 ? mean(t.vats) : null, idealAA: t.vats.length >= 5 ? t.ideal / t.vats.length : null,
+    attackDir: t.hats.length >= 5 ? mean(t.hats) : null,
+    sqPct: t.sqN >= 5 ? t.sq / t.sqN : null, blastPct: t.sqN >= 5 ? t.blast / t.sqN : null, contactsTracked: t.sqN,
     runs: t.runs, outs: t.outs, maxDist: t.dists.length ? Math.max(...t.dists) : null,
   };
   o.ops = o.obp != null && o.slg != null ? o.obp + o.slg : null;
@@ -348,6 +363,14 @@ const C = {
   fbVelo: { k: 'fbVelo', label: 'FB Velo', fmt: F.f1, tip: 'Average four-seam + sinker velocity' }, fbMax: { k: 'fbMax', label: 'FB Max', fmt: F.f1 },
   fbSpin: { k: 'fbSpin', label: 'FB Spin', fmt: F.int }, fbIVB: { k: 'fbIVB', label: 'FB IVB', fmt: F.f1 }, ext: { k: 'ext', label: 'Ext.', fmt: F.f1 },
   maxDist: { k: 'maxDist', label: 'Max Dist', fmt: F.int },
+  swingsTracked: { k: 'swingsTracked', label: 'Swings', fmt: F.int, tip: 'Swings with bat tracking (50+ mph)' },
+  batTop: { k: 'batTop', label: 'Top-10% Bat Spd', fmt: F.f1, tip: 'Average of the fastest 10% of tracked swings' },
+  fastPct: { k: 'fastPct', label: 'Fast-Swing%', fmt: F.pct, tip: 'Share of tracked swings at 75+ mph' },
+  attackAngle: { k: 'attackAngle', label: 'Attack Angle', fmt: F.f1, tip: 'Average vertical attack angle at contact (°)' },
+  idealAA: { k: 'idealAA', label: 'Ideal AA%', fmt: F.pct, tip: 'Swings with an attack angle of 5°–20°' },
+  attackDir: { k: 'attackDir', label: 'Attack Dir.', fmt: v => v == null ? '—' : `${Math.abs(v).toFixed(1)}° ${v >= 0 ? 'pull' : 'oppo'}`, tip: 'Average horizontal attack angle, toward the pull or opposite field' },
+  sqPct: { k: 'sqPct', label: 'Squared-Up%', fmt: F.pct, tip: 'Contact reaching 80%+ of the max exit velo possible from the bat and pitch speed' },
+  blastPct: { k: 'blastPct', label: 'Blast%', fmt: F.pct, tip: 'Contact where squared-up % × 100 + bat speed ≥ 164' },
 };
 const cols = (...ks) => ks.map(k => C[k]);
 const HIT_VIEWS = {
@@ -355,6 +378,7 @@ const HIT_VIEWS = {
   statcast: ['Batted Ball', cols('PA', 'bbe', 'avgEV', 'ev90', 'maxEV', 'avgLA', 'ssPct', 'brl', 'brlPct', 'hhPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff', 'batSpd', 'maxBat')],
   discipline: ['Plate Discipline', cols('PA', 'pitches', 'kPct', 'bbPct', 'swing', 'zswing', 'chase', 'whiff', 'zcontact', 'contact', 'fpSwing')],
   profile: ['Batted-Ball Profile', cols('bbe', 'gbPct', 'ldPct', 'fbPct', 'puPct', 'pullPct', 'centPct', 'oppoPct', 'maxDist')],
+  bat: ['Bat Tracking', cols('swingsTracked', 'batSpd', 'batTop', 'maxBat', 'fastPct', 'attackAngle', 'idealAA', 'attackDir', 'sqPct', 'blastPct', 'avgEV', 'hhPct')],
 };
 const PIT_VIEWS = {
   standard: ['Standard', cols('G', 'ip', 'PA', 'pitches', 'H', 'HR', 'BB', 'K', 'HBP', 'runs', 'avg', 'obp', 'slg', 'woba', 'kPct', 'bbPct', 'kbb')],
@@ -391,7 +415,7 @@ function svg(w, h, inner, label) { return `<svg class="chart" viewBox="0 0 ${w} 
 const RES_COLOR = { '1B': '#2f8f5b', '2B': '#2e5fb4', '3B': '#8a4fc9', HR: '#d1293d', OUT: '#9a9496' };
 function resGroup(r) { return ['1B', '2B', '3B', 'HR'].includes(r) ? r : 'OUT'; }
 
-function sprayChart(rows) {
+function sprayChart(rows, opts = {}) {
   const W = 420, H = 380, hx = 210, hy = 355, s = 0.78;
   const pt = (d, a) => [hx + s * d * Math.sin(a * Math.PI / 180), hy - s * d * Math.cos(a * Math.PI / 180)];
   const fence = []; for (let a = -45; a <= 45; a += 3) fence.push(pt(330 + 70 * Math.cos(a * 2 * Math.PI / 180), a));
@@ -401,12 +425,27 @@ function sprayChart(rows) {
   const b1 = pt(90, 45), b2 = pt(127.3, 0), b3 = pt(90, -45);
   g += `<path class="ax" d="M${hx},${hy} L${b1.join(',')} L${b2.join(',')} L${b3.join(',')} Z"/>`;
   const bb = rows.filter(r => r.c === 'X' && r.dir != null && r.dist != null && r.ht !== 'BU');
-  g += bb.map(r => {
-    const [x, y] = pt(Math.min(r.dist, 460), Math.max(-50, Math.min(50, r.dir)));
+  const mode = opts.color || 'result', many = bb.length > 250;
+  const HT_COLOR = { GB: '#b07d1c', LD: '#d1293d', FB: '#2e5fb4', PU: '#8a4fc9', '': '#9a9496' };
+  const evColor = ev => ev == null ? '#9a9496' : pctColor(Math.max(0, Math.min(100, (ev - 60) / 50 * 100)));
+  const ordered = mode === 'result' ? [...bb].sort((a, b) => (resGroup(a.r) === 'OUT') - (resGroup(b.r) === 'OUT')).reverse() : mode === 'ev' ? [...bb].sort((a, b) => (a.ev ?? 0) - (b.ev ?? 0)) : bb;
+  g += ordered.map(r => {
     const res = resGroup(r.r);
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${res === 'OUT' ? 3.2 : 4.2}" fill="${RES_COLOR[res]}" fill-opacity="${res === 'OUT' ? .55 : .9}"><title>${esc(RES_NAME[r.r] || r.r)} · ${F.f1(r.ev)} mph, ${F.f1(r.la)}°, ${F.int(r.dist)} ft · ${esc(fmtDate(r.d))} vs ${esc(niceName(pname(r.p)))}</title></circle>`;
+    // TrackMan's distance on grounders is where tracking stopped, so draw them at a set depth
+    const grounder = r.ht === 'GB' || (r.ht === '' && r.la != null && r.la < 10);
+    const evT = Math.max(0, Math.min(1, ((r.ev ?? 80) - 50) / 60));
+    const dist = grounder ? Math.max(r.dist, res === 'OUT' ? 80 + evT * 75 : 145 + evT * 100) : r.dist;
+    const [x, y] = pt(Math.min(dist, 460), Math.max(-50, Math.min(50, r.dir)));
+    const fill = mode === 'ev' ? evColor(r.ev) : mode === 'ht' ? HT_COLOR[r.ht || ''] : RES_COLOR[res];
+    const rad = (many ? 0.75 : 1) * (mode === 'result' && res === 'OUT' ? 3.2 : 4);
+    const op = mode === 'result' && res === 'OUT' ? .5 : .85;
+    const who = opts.showBatter ? `${esc(niceName(pname(r.h)))} · ` : '';
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad}" fill="${fill}" fill-opacity="${op}"><title>${who}${esc(RES_NAME[r.r] || r.r)} · ${F.f1(r.ev)} mph, ${F.f1(r.la)}°, ${F.int(r.dist)} ft · ${esc(fmtDate(r.d))} vs ${esc(niceName(pname(r.p)))}</title></circle>`;
   }).join('');
-  const leg = `<div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}<span>${bb.length} batted balls</span></div>`;
+  let leg;
+  if (mode === 'ev') leg = `<div class="legend"><span>Exit velo</span><span style="display:inline-flex;align-items:center;gap:6px">60<i style="width:120px;height:9px;border-radius:5px;background:linear-gradient(90deg,${evColor(60)},${evColor(85)},${evColor(110)})"></i>110+ mph</span><span>${bb.length} batted balls</span></div>`;
+  else if (mode === 'ht') leg = `<div class="legend">${['GB', 'LD', 'FB', 'PU'].map(k => `<span><i style="background:${HT_COLOR[k]}"></i>${HT_NAME[k]}</span>`).join('')}<span>${bb.length} batted balls</span></div>`;
+  else leg = `<div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}<span>${bb.length} batted balls</span></div>`;
   return svg(W, H, g, 'Spray chart') + leg;
 }
 
@@ -579,7 +618,6 @@ async function pageHome() {
     <div class="hero-l">
       <span class="eyebrow">Boston College Baseball · TrackMan</span>
       <h1>Birdball<span>Savant</span></h1>
-      <p>Every tracked pitch and batted ball from Boston College games and fall ball, turned into leaderboards, percentile rankings, pitch arsenals and spray charts.</p>
       <div class="controls"><label for="home-season">Season</label>${seasonSelect('home-season', v => { setSeason(v); route(); })}</div>
     </div>
     <div class="hero-r">
@@ -651,9 +689,10 @@ async function pageLeaders(kind) {
   const views = isHit ? HIT_VIEWS : PIT_VIEWS;
   const ui = S.ui[kind] || (S.ui[kind] = { view: 'standard', min: null });
   const min = ui.min ?? T.q;
-  const data = T.rows.filter(o => o.PA >= min);
+  const data = T.rows.filter(o => o.PA >= min && (ui.view !== 'bat' || o.swingsTracked > 0));
+  if (!views[ui.view]) ui.view = 'standard';
   const [vlabel, vcols] = views[ui.view];
-  const defSort = isHit ? (ui.view === 'discipline' ? 'PA' : ui.view === 'statcast' ? 'xwoba' : 'ops') : (ui.view === 'standard' ? 'outs' : ui.view === 'statcast' ? 'PA' : 'pitches');
+  const defSort = isHit ? (ui.view === 'bat' ? 'batSpd' : ui.view === 'discipline' ? 'PA' : ui.view === 'statcast' ? 'xwoba' : 'ops') : (ui.view === 'standard' ? 'outs' : ui.view === 'statcast' ? 'PA' : 'pitches');
   const tid = `t-${kind}-${ui.view}`;
   if (!S.sort[tid]) S.sort[tid] = { k: defSort, asc: false };
   const total = stats(se.rows.filter(r => isBC(S.players[isHit ? r.h : r.p]?.t)));
@@ -665,6 +704,7 @@ async function pageLeaders(kind) {
       <label for="lb-min">Min ${isHit ? 'PA' : 'BF'}</label><input id="lb-min" type="number" min="0" value="${min}">
     </div></div>
   <div class="controls">${segmented('lb-view', Object.entries(views).map(([k, v]) => [k, v[0]]), ui.view, v => { ui.view = v; route(); })}
+    ${ui.view === 'bat' ? `<span class="muted small">Bat tracking was on in ${new Set(se.rows.filter(r => r.bat != null).map(r => r.g)).size} of ${se.games.length} games this season</span>` : ''}
     <span class="muted small">${data.length} of ${T.rows.length} players · qualified = ${T.q}+ ${isHit ? 'PA' : 'batters faced'} · click a column to sort${isHit && se.games.some(g => g.nt) ? ` · includes ${se.games.filter(g => g.nt).length} results-only game(s) in counting stats` : ''}</span></div>
   ${table(tid, [nameCol, ...(isHit ? [{ k: 'bats', label: 'B', fmt: F.str }] : [{ k: 'throws', label: 'T', fmt: F.str }]), ...vcols], data, { total })}`;
   const mi = $('#lb-min'); mi.onchange = () => { ui.min = Math.max(0, +mi.value || 0); route(); };
@@ -695,6 +735,71 @@ async function pageArsenal() {
   <p class="muted small">Pitch types come from the TrackMan tag, falling back to TrackMan's auto-tag when a pitch was left untagged. "Fastball" tags are shown as four-seamers.</p>`;
   $('#ar-pt').onchange = e => { ui.pt = e.target.value; route(); };
   $('#ar-min').onchange = e => { ui.min = Math.max(1, +e.target.value || 1); route(); };
+}
+
+async function pageSpray() {
+  setNav('spray');
+  const se = await loadSeason(S.season);
+  const f = S.ui.spray || (S.ui.spray = { bat: '', res: '', ht: '', bs: '', th: '', grp: '', minEV: '', color: 'result' });
+  const opt = (arr, v) => arr.map(([k, l]) => `<option value="${esc(k)}" ${String(v) === String(k) ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  const batters = [...se.byH.keys()].filter(i => S.players[i].bc && se.byH.get(i).some(r => r.c === 'X' && r.dir != null)).sort((a, b) => pname(a).localeCompare(pname(b)));
+  app.innerHTML = `
+  <div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · Boston College hitters</span><h1>Spray Chart</h1></div>
+    <div class="controls">${seasonSelect('sp-season', v => { setSeason(v); route(); })}</div></div>
+  <form class="panel filters" id="sp-form">
+    <label>Batter<select name="bat"><option value="">All BC hitters</option>${opt(batters.map(i => [i, niceName(pname(i))]), f.bat)}</select></label>
+    <label>Result<select name="res"><option value="">Any</option>${opt([['hit', 'Hits'], ['xbh', 'Extra-base hits'], ['HR', 'Home runs'], ['out', 'Outs / other']], f.res)}</select></label>
+    <label>Batted-ball type<select name="ht"><option value="">Any</option>${opt([['GB', 'Ground balls'], ['LD', 'Line drives'], ['FB', 'Fly balls'], ['PU', 'Popups']], f.ht)}</select></label>
+    <label>Batter side<select name="bs"><option value="">Any</option>${opt([['R', 'RHH'], ['L', 'LHH']], f.bs)}</select></label>
+    <label>Pitcher hand<select name="th"><option value="">Any</option>${opt([['R', 'vs RHP'], ['L', 'vs LHP']], f.th)}</select></label>
+    <label>Pitch type<select name="grp"><option value="">Any</option>${opt([['Fastballs', 'Fastballs'], ['Breaking', 'Breaking balls'], ['Offspeed', 'Offspeed']], f.grp)}</select></label>
+    <label>Min exit velo<input name="minEV" type="number" min="0" max="130" value="${esc(f.minEV)}"></label>
+    <label>Color by<select name="color">${opt([['result', 'Result'], ['ev', 'Exit velo'], ['ht', 'Batted-ball type']], f.color)}</select></label>
+  </form>
+  <section class="grid-pp" style="align-items:start">
+    <div class="panel"><div id="sp-chart" class="chart-box" style="max-width:640px"></div></div>
+    <div style="display:grid;gap:16px;min-width:0" id="sp-side"></div>
+  </section>`;
+  const form = $('#sp-form');
+  const run = () => {
+    for (const [k, v] of new FormData(form)) f[k] = v;
+    const rows = se.rows.filter(r => {
+      if (!isBC(S.players[r.h].t) || r.c !== 'X' || r.ht === 'BU') return false;
+      if (f.bat !== '' && r.h !== +f.bat) return false;
+      const hit = ['1B', '2B', '3B', 'HR'].includes(r.r);
+      if (f.res === 'hit' && !hit) return false;
+      if (f.res === 'xbh' && !['2B', '3B', 'HR'].includes(r.r)) return false;
+      if (f.res === 'HR' && r.r !== 'HR') return false;
+      if (f.res === 'out' && hit) return false;
+      if (f.ht && r.ht !== f.ht) return false;
+      if (f.bs && r.bs !== f.bs) return false;
+      if (f.th && r.th !== f.th) return false;
+      if (f.grp && GROUP[r.pt] !== f.grp) return false;
+      if (f.minEV !== '' && !(r.ev != null && r.ev >= +f.minEV)) return false;
+      return true;
+    });
+    const plotted = rows.filter(r => r.dir != null && r.dist != null);
+    const st = stats(rows);
+    const hits = rows.filter(r => ['1B', '2B', '3B', 'HR'].includes(r.r)).length;
+    $('#sp-chart').innerHTML = sprayChart(plotted, { color: f.color, showBatter: f.bat === '' });
+    const byB = new Map(); rows.forEach(r => { if (!byB.has(r.h)) byB.set(r.h, []); byB.get(r.h).push(r); });
+    const list = [...byB].map(([i, a]) => ({ i, name: pname(i), ...stats(a), n: a.length }));
+    $('#sp-side').innerHTML = `
+      <div class="strip">
+        <div class="tile"><div class="tile-v">${F.int(rows.length)}</div><div class="tile-l">Balls in play</div></div>
+        <div class="tile"><div class="tile-v">${F.int(hits)}</div><div class="tile-l">Hits</div></div>
+        <div class="tile"><div class="tile-v">${F.avg(rows.length ? hits / rows.length : null)}</div><div class="tile-l">Avg on contact</div></div>
+        <div class="tile"><div class="tile-v">${F.f1(st.avgEV)}</div><div class="tile-l">Avg EV</div></div>
+        <div class="tile"><div class="tile-v">${F.pct(st.hhPct)}</div><div class="tile-l">Hard Hit %</div></div>
+        <div class="tile"><div class="tile-v">${F.pct(st.brlPct)}</div><div class="tile-l">Barrel %</div></div>
+        <div class="tile"><div class="tile-v">${F.pct(st.pullPct)}</div><div class="tile-l">Pull %</div></div>
+        <div class="tile"><div class="tile-v">${F.pct(st.centPct)}</div><div class="tile-l">Straight %</div></div>
+        <div class="tile"><div class="tile-v">${F.pct(st.oppoPct)}</div><div class="tile-l">Oppo %</div></div>
+      </div>
+      ${f.bat === '' ? table('t-spray-b', [nameCol, { k: 'n', label: 'BIP', fmt: F.int }, C.avgEV, C.hhPct, C.pullPct, C.oppoPct, C.gbPct], list, { sort: 'n' }) : `<a class="btn" href="#player-${esc(S.players[+f.bat].k)}">Open ${esc(niceName(pname(+f.bat)))}'s page</a>`}`;
+  };
+  form.onchange = run; form.onsubmit = e => { e.preventDefault(); run(); };
+  run();
 }
 
 async function pageGames() {
@@ -794,6 +899,7 @@ function hitterBody(i, p, seasons, ui) {
   </section>
   <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Batted ball &amp; expected stats</h2></div>${table('t-ph-sc', [sCol, ...HIT_VIEWS.statcast[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
+  ${all.swingsTracked ? `<section><div class="panel-h"><h2>Bat tracking</h2><span class="note">Only games with bat tracking turned on</span></div>${table('t-ph-bat', [sCol, ...HIT_VIEWS.bat[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>` : ''}
   <section><div class="panel-h"><h2>Plate discipline</h2></div>${table('t-ph-pd', [sCol, ...HIT_VIEWS.discipline[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section class="grid2">
     <div class="panel"><div class="panel-h"><h2>Zone profile</h2>
@@ -964,6 +1070,8 @@ function pageGlossary() {
     ['Sweet-Spot %', 'Share of tracked batted balls with a launch angle between 8° and 32°.'],
     ['EV90', 'The 90th-percentile exit velocity, a steadier measure of top-end power than max EV.'],
     ['Bat Speed', 'Average TrackMan bat speed on swings of 50+ mph (to leave out checked swings and bunts). Only available in games where bat tracking was on.'],
+    ['Bat tracking', 'TrackMan bat speed and attack angles, recorded only in games where bat tracking was on, and only for swings of 50+ mph. Fast-Swing% is the share of those swings at 75+ mph. Attack Angle is the bat\'s vertical angle at contact; Ideal AA% is the share between 5° and 20°. Attack Direction is the bat\'s horizontal angle, shown toward the pull or opposite field.'],
+    ['Squared-Up % / Blast %', 'Per tracked contact. A ball is squared up when its exit velocity reaches 80% of the most the swing could produce (1.23 × bat speed + 0.23 × pitch speed, the MLB Statcast formula). A blast is contact where squared-up % × 100 + bat speed is at least 164. Swing length is not recorded by TrackMan, so it is not shown.'],
     ['Zone', `The strike zone used for Zone%, Chase% and zone charts is ±${ZW} ft from the center of the plate (plate plus a ball's width) and ${ZB}–${ZT} ft high.`],
     ['Chase %', 'Swings at pitches outside the zone ÷ pitches outside the zone.'],
     ['Whiff %', 'Swinging strikes ÷ swings.'],
@@ -1034,6 +1142,7 @@ async function route() {
     if (!h || h === 'home') await pageHome();
     else if (h === 'hitting' || h === 'pitching') await pageLeaders(h);
     else if (h === 'arsenal') await pageArsenal();
+    else if (h === 'spray') await pageSpray();
     else if (h === 'games') await pageGames();
     else if (h.startsWith('game-')) { const m = h.match(/^game-(.+)-(\d+)$/); if (m) await pageGame(m[1], +m[2]); }
     else if (h.startsWith('player-')) await pagePlayer(h.slice(7));

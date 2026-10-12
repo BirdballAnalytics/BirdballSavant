@@ -57,14 +57,14 @@ USECOLS = [
     "InducedVertBreak", "HorzBreak", "RelHeight", "RelSide", "Extension",
     "VertApprAngle", "PlateLocHeight", "PlateLocSide", "ExitSpeed", "Angle",
     "Direction", "Distance", "HangTime", "BatSpeed", "VerticalAttackAngle",
-    "HomeTeam", "AwayTeam", "Stadium", "Level",
+    "HorizontalAttackAngle", "HomeTeam", "AwayTeam", "Stadium", "Level",
 ]
 NUMERIC = [
     "PitchNo", "Inning", "PAofInning", "PitchofPA", "Outs", "Balls", "Strikes",
     "OutsOnPlay", "RunsScored", "RelSpeed", "SpinRate", "SpinAxis", "InducedVertBreak",
     "HorzBreak", "RelHeight", "RelSide", "Extension", "VertApprAngle", "PlateLocHeight",
     "PlateLocSide", "ExitSpeed", "Angle", "Direction", "Distance", "HangTime",
-    "BatSpeed", "VerticalAttackAngle",
+    "BatSpeed", "VerticalAttackAngle", "HorizontalAttackAngle",
 ]
 
 
@@ -630,6 +630,8 @@ def build():
             "dir": [r(x, 1) for x in sdf["Direction"]],
             "dist": [r(x, 0) for x in sdf["Distance"]],
             "bat": [r(x, 1) for x in sdf["BatSpeed"]],
+            "vat": [r(x, 1) for x in sdf["VerticalAttackAngle"]],
+            "hat": [r(x, 1) for x in sdf["HorizontalAttackAngle"]],
             "xba": [r(x, 3) for x in sdf["xba"]],
             "xslg": [r(x, 3) for x in sdf["xslg"]],
             "xw": [r(x, 3) for x in sdf["xwv"]],
