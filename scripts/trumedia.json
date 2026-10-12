@@ -1,6 +1,6 @@
 {
   "_note": "TruMedia college baseball pull. Credentials come from GitHub secrets (TRUMEDIA_USERNAME, TRUMEDIA_SITENAME, TRUMEDIA_MASTER_TOKEN), never from this file. Set enabled to true once you are comfortable with who can see the site (see README).",
-  "enabled": false,
+  "enabled": true,
   "seasons": [2025, 2026],
   "seasonType": "REG",
   "filter": "(team.game.gameLeague = 'D1')",
