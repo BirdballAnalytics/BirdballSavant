@@ -1,5 +1,7 @@
 name: Build and publish BirdballSavant
 
+# Rebuilds the site whenever data (or the site itself) changes on main,
+# and can also be run by hand from the Actions tab.
 on:
   push:
     branches: [main]
@@ -9,6 +11,8 @@ on:
       - "scripts/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"   # every Monday morning: refresh TruMedia data
 
 permissions:
   contents: read
@@ -24,16 +28,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: scripts/requirements.txt
+
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
+
+      - name: Restore last TruMedia pull
+        uses: actions/cache/restore@v4
+        with:
+          path: site/data/ncaa-*.json
+          key: trumedia-${{ github.run_id }}
+          restore-keys: trumedia-
+
+      - name: Pull TruMedia NCAA data
+        if: github.event_name != 'push' || contains(github.event.head_commit.modified, 'scripts/trumedia.json') || contains(github.event.head_commit.added, 'scripts/trumedia.json')
+        continue-on-error: true
+        env:
+          TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
+          TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
+          TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
+        run: python scripts/trumedia.py
+
+      - name: Save TruMedia pull for next time
+        uses: actions/cache/save@v4
+        if: always() && hashFiles('site/data/ncaa-*.json') != ''
+        continue-on-error: true
+        with:
+          path: site/data/ncaa-*.json
+          key: trumedia-${{ github.run_id }}
+
       - name: Build data files from everything in data/
         run: python scripts/build.py
+
       - uses: actions/configure-pages@v5
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
