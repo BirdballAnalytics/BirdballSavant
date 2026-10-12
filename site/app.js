@@ -509,7 +509,8 @@ function locationChart(rows, active) {
     g += `<line class="grid" x1="${X(-ZW + i * 2 * ZW / 3)}" x2="${X(-ZW + i * 2 * ZW / 3)}" y1="${Y(ZT)}" y2="${Y(ZB)}"/>`;
     g += `<line class="grid" y1="${Y(ZB + i * (ZT - ZB) / 3)}" y2="${Y(ZB + i * (ZT - ZB) / 3)}" x1="${X(-ZW)}" x2="${X(ZW)}"/>`;
   }
-  g += `<path class="plate" d="M${X(-0.71)},${Y(0.25)} h${1.42 * 60} l-6,6 l-${(1.42 * 60 - 12) / 2},6 l-${(1.42 * 60 - 12) / 2},-6 Z"/>`;
+  // home plate: flat edge at the bottom, point facing up
+  g += `<path class="plate" d="M${X(-0.71)},${Y(0.25) + 12} h${1.42 * 60} v-6 l-${1.42 * 60 / 2},-6 l-${1.42 * 60 / 2},6 Z"/>`;
   const pts = rows.filter(r => r.px != null && r.pz != null && active.has(r.pt));
   g += pts.map(r => `<circle cx="${X(Math.max(-2.4, Math.min(2.4, r.px))).toFixed(1)}" cy="${Y(Math.max(-0.2, Math.min(5.2, r.pz))).toFixed(1)}" r="3" fill="${PT[r.pt].c}" fill-opacity=".55"><title>${PT[r.pt].n} ${F.f1(r.v)} mph · ${esc(CALL_NAME[r.c])}${r.r ? ' · ' + esc(RES_NAME[r.r]) : ''}</title></circle>`).join('');
   return svg(W, H, g, 'Pitch locations, catcher\'s view');
