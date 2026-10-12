@@ -46,6 +46,32 @@ Things the build handles for you:
 - A file that isn't a TrackMan export is skipped, and the **Data status** page on the
   site lists every file and how many rows were read from it.
 
+### Games without TrackMan (results files)
+
+For a game with no TrackMan file, you can upload a results sheet instead: one row per BC
+plate appearance with these columns:
+
+| Batter | Balls | Strikes | Result |
+|---|---|---|---|
+| Solier, Julio | 1 | 1 | L9 |
+| Solier, Julio | 1 | 2 | K |
+| Gallo, Luke | 0 | 0 | SAC F9 |
+
+- **Put the date and opponent in the file name**, e.g. `2026-09-26 URI Results.xlsx` or
+  `9.26.26vsURI.xlsx`. For a doubleheader add `Game 2`. (A `Date` or `Opponent` column
+  works too.) A file with no date is skipped.
+- **Results** use scorebook notation: `1B` `2B` `3B` `HR`, `K`/`KL`, `BB`, `HBP`,
+  ground outs like `6-3` or `4-6-3`, `F8` (fly), `L9` (liner), `P5` (popup), `E6`,
+  `FC`, `SAC 1-3` (sac bunt), `SAC F9` (sac fly).
+- These plate appearances count toward PA, AB, H, AVG/OBP/SLG, wOBA, K%, BB% and
+  GB/LD/FB rates. They are left out of anything that needs tracking (exit velocity,
+  xwOBA, swing/chase/whiff rates, pitch counts).
+- Batter names are matched to TrackMan names automatically, so small typos like
+  "Mainolfy" → "Mainolfi" are fixed. The **Data status** page shows every match so you
+  can check it. To force a spelling, add it to `scripts/aliases.json`.
+- Don't upload a results file for a game that also has a TrackMan file, or those plate
+  appearances will count twice.
+
 GitHub's web uploader accepts files up to 25 MB each. Per-game TrackMan CSVs are well
 under that. For a larger combined file, upload it as `.xlsx` (much smaller than CSV)
 or split it.

@@ -118,9 +118,12 @@ function stats(rows) {
   const t = { pitches: 0, PA: 0, AB: 0, H: 0, '1B': 0, '2B': 0, '3B': 0, HR: 0, BB: 0, HBP: 0, K: 0, SF: 0, SH: 0, ROE: 0, TB: 0,
     wsum: 0, xwsum: 0, xbasum: 0, xslgsum: 0, bbe: 0, evs: [], las: [], hh: 0, brl: 0, ss: 0, gb: 0, ld: 0, fb: 0, pu: 0, htN: 0,
     pull: 0, cent: 0, oppo: 0, dirN: 0, sw: 0, wh: 0, zn: 0, zsw: 0, zcon: 0, ozn: 0, osw: 0, ocon: 0, locN: 0, fpN: 0, fps: 0, fpk: 0, csw: 0,
-    bats: [], runs: 0, outs: 0, games: new Set(), dists: [] };
+    bats: [], runs: 0, outs: 0, games: new Set(), dists: [], ntPA: 0, tAB: 0, tden: 0 };
   for (const r of rows) {
-    t.pitches++; t.games.add(r.sid + ':' + r.g);
+    t.games.add(r.sid + ':' + r.g);
+    const nt = r.nt === 1;
+    if (!nt) {
+    t.pitches++;
     if (r.sw) { t.sw++; if (r.wh) t.wh++; }
     if (r.iz === true) { t.zn++; t.locN++; if (r.sw) { t.zsw++; if (!r.wh) t.zcon++; } }
     else if (r.iz === false) { t.ozn++; t.locN++; if (r.sw) { t.osw++; if (!r.wh) t.ocon++; } }
@@ -128,6 +131,7 @@ function stats(rows) {
     if (r.c === 'C' || r.c === 'S') t.csw++;
     if (r.bat != null && r.bat >= 50 && r.sw) t.bats.push(r.bat);
     t.runs += r.rs || 0; t.outs += r.oop || 0; if (r.r === 'K' && !r.oop) t.outs++;
+    }
     if (r.c === 'X' && r.ht !== 'BU') {
       if (r.ev != null) {
         t.bbe++; t.evs.push(r.ev);
@@ -144,22 +148,26 @@ function stats(rows) {
     }
     const e = r.r; if (!e) continue;
     t.PA++;
+    if (nt) t.ntPA++;
+    else { if (AB_EVENTS.has(e)) t.tAB++; if (e === 'BB' || e === 'HBP' || e === 'SF' || AB_EVENTS.has(e)) t.tden++; }
     if (e in t) t[e]++;
     if (AB_EVENTS.has(e)) t.AB++;
     if (e === '1B' || e === '2B' || e === '3B' || e === 'HR') { t.H++; t.TB += { '1B': 1, '2B': 2, '3B': 3, HR: 4 }[e]; }
     if (e !== 'SH') {
       t.wsum += WT[e] || 0;
-      if (e === 'BB' || e === 'HBP') t.xwsum += WT[e];
-      else if (r.c === 'X') t.xwsum += r.xw ?? (WT[e] || 0);
+      if (!nt) {
+        if (e === 'BB' || e === 'HBP') t.xwsum += WT[e];
+        else if (r.c === 'X') t.xwsum += r.xw ?? (WT[e] || 0);
+      }
     }
-    if (r.c === 'X' && AB_EVENTS.has(e)) { t.xbasum += r.xba ?? 0; t.xslgsum += r.xslg ?? 0; }
+    if (!nt && r.c === 'X' && AB_EVENTS.has(e)) { t.xbasum += r.xba ?? 0; t.xslgsum += r.xslg ?? 0; }
   }
   const d = (a, b) => b > 0 ? a / b : null;
   const wden = t.AB + t.BB + t.SF + t.HBP;
   const o = {
     G: t.games.size, pitches: t.pitches, PA: t.PA, AB: t.AB, H: t.H, '1B': t['1B'], '2B': t['2B'], '3B': t['3B'], HR: t.HR, BB: t.BB, HBP: t.HBP, K: t.K, SF: t.SF, SH: t.SH, ROE: t.ROE, TB: t.TB,
     avg: d(t.H, t.AB), obp: d(t.H + t.BB + t.HBP, t.AB + t.BB + t.HBP + t.SF), slg: d(t.TB, t.AB),
-    woba: d(t.wsum, wden), xwoba: d(t.xwsum, wden), xba: d(t.xbasum, t.AB), xslg: d(t.xslgsum, t.AB),
+    woba: d(t.wsum, wden), xwoba: d(t.xwsum, t.tden), xba: d(t.xbasum, t.tAB), xslg: d(t.xslgsum, t.tAB), ntPA: t.ntPA,
     babip: d(t.H - t.HR, t.AB - t.K - t.HR + t.SF),
     kPct: d(t.K, t.PA), bbPct: d(t.BB, t.PA),
     bbe: t.bbe, avgEV: mean(t.evs), maxEV: t.evs.length ? Math.max(...t.evs) : null, ev90: quantile(t.evs, 0.9), avgLA: mean(t.las),
@@ -174,7 +182,7 @@ function stats(rows) {
   o.ops = o.obp != null && o.slg != null ? o.obp + o.slg : null;
   o.iso = o.slg != null && o.avg != null ? o.slg - o.avg : null;
   o.kbb = o.kPct != null ? o.kPct - o.bbPct : null;
-  o.wobaDiff = o.xwoba != null && o.woba != null ? o.woba - o.xwoba : null;
+  o.wobaDiff = o.xwoba != null && o.woba != null && !t.ntPA ? o.woba - o.xwoba : null;
   return o;
 }
 function pitchShape(rows) {
@@ -632,7 +640,7 @@ async function pageHome() {
 }
 function gameRow(se, g) {
   const opp = g.opp ? `${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}` : 'Intrasquad';
-  return `<a class="grow" href="#game-${se.id}-${g.gi}"><span class="gd">${esc(fmtDate(g.d))}</span><span class="go">${opp}</span><span class="gm">${F.int(g.n)} pitches</span></a>`;
+  return `<a class="grow" href="#game-${se.id}-${g.gi}"><span class="gd">${esc(fmtDate(g.d))}</span><span class="go">${opp}</span><span class="gm">${g.nt ? `${F.int(g.n)} PA · results only` : `${F.int(g.n)} pitches`}</span></a>`;
 }
 
 async function pageLeaders(kind) {
@@ -657,7 +665,7 @@ async function pageLeaders(kind) {
       <label for="lb-min">Min ${isHit ? 'PA' : 'BF'}</label><input id="lb-min" type="number" min="0" value="${min}">
     </div></div>
   <div class="controls">${segmented('lb-view', Object.entries(views).map(([k, v]) => [k, v[0]]), ui.view, v => { ui.view = v; route(); })}
-    <span class="muted small">${data.length} of ${T.rows.length} players · qualified = ${T.q}+ ${isHit ? 'PA' : 'batters faced'} · click a column to sort</span></div>
+    <span class="muted small">${data.length} of ${T.rows.length} players · qualified = ${T.q}+ ${isHit ? 'PA' : 'batters faced'} · click a column to sort${isHit && se.games.some(g => g.nt) ? ` · includes ${se.games.filter(g => g.nt).length} results-only game(s) in counting stats` : ''}</span></div>
   ${table(tid, [nameCol, ...(isHit ? [{ k: 'bats', label: 'B', fmt: F.str }] : [{ k: 'throws', label: 'T', fmt: F.str }]), ...vcols], data, { total })}`;
   const mi = $('#lb-min'); mi.onchange = () => { ui.min = Math.max(0, +mi.value || 0); route(); };
 }
@@ -713,6 +721,14 @@ async function pageGame(sid, gi) {
     .map(r => ({ i: r.h, name: pname(r.h), ev: r.ev, la: r.la, dist: r.dist, r: r.r, inn: r.inn, pit: r.p, team: S.players[r.h].t }));
   const batCols = [nameCol, C.PA, C.AB, C.H, C['2B'], C.HR, C.BB, C.K, C.bbe, C.avgEV, C.maxEV, { k: 'hh', label: 'Hard Hit', get: r => r.hhPct != null ? Math.round(r.hhPct * r.bbe) : null, fmt: F.int }, C.xwoba];
   const pitCols = [nameCol, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, { k: 'swk', label: 'Whiffs', get: r => r.whiff != null ? Math.round(r.whiff * r.swing * r.pitches) : 0, fmt: F.int }, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba];
+  if (g.nt) {
+    app.innerHTML = `
+  <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · Results only</span>
+    <h1>BC vs ${esc(teamName(g.opp))}</h1></div><div class="controls"><a class="btn" href="#games">All games</a></div></div>
+  <p class="muted small" style="margin:0">No TrackMan file for this game. Plate-appearance results count toward AVG, OBP, SLG, wOBA, K% and BB%, and are left out of tracked stats like exit velocity and xwOBA.</p>
+  <section><div class="panel-h"><h2>BC hitters</h2></div>${table('t-gbat', [nameCol, C.PA, C.AB, C.H, C['2B'], C['3B'], C.HR, C.BB, C.K, C.HBP, C.avg, C.obp, C.slg], bcBat, { sort: 'PA', total: { ...stats(rows), _label: 'BC total' } })}</section>`;
+    return;
+  }
   app.innerHTML = `
   <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${esc(g.st)}</span>
     <h1>${intra ? 'Intrasquad' : `BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}`}</h1></div>
@@ -776,7 +792,7 @@ function hitterBody(i, p, seasons, ui) {
       ${pctBars(HIT_PCT.filter(d => d[1] !== 'batSpd' || pool.some(o => o.batSpd != null)), meRow, pool)}</div>
     <div class="panel"><div class="panel-h"><h2>Spray chart</h2><span class="note">${esc(se.label)}</span></div><div class="chart-box">${sprayChart(rows)}</div></div>
   </section>
-  <section><div class="panel-h"><h2>Standard</h2></div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
+  <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Batted ball &amp; expected stats</h2></div>${table('t-ph-sc', [sCol, ...HIT_VIEWS.statcast[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Plate discipline</h2></div>${table('t-ph-pd', [sCol, ...HIT_VIEWS.discipline[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section class="grid2">
@@ -885,6 +901,7 @@ async function pageSearch() {
   const run = () => {
     const fd = new FormData(form); for (const [k, v] of fd) f[k] = v;
     const res = se.rows.filter(r => {
+      if (r.nt) return false;
       if (f.team === 'bcp' && !isBC(S.players[r.p].t)) return false;
       if (f.team === 'bch' && !isBC(S.players[r.h].t)) return false;
       if (f.pit !== '' && r.p !== +f.pit) return false;
@@ -956,6 +973,7 @@ function pageGlossary() {
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
     ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify at 30% of the team-leading plate appearances (at least 10); pitchers at 30% of the team-leading batters faced. Non-qualified players are shown faded against the same pool.'],
     ['IP and R', 'Innings pitched and runs come from TrackMan outs-on-play and runs-scored tagging. They are close to the official box score but are not official, and runs are not split into earned and unearned.'],
+    ['Results-only games', 'Games uploaded as plate-appearance results instead of TrackMan. They count toward PA, AB, hits, AVG, OBP, SLG, wOBA, K%, BB% and batted-ball type (from the scorebook notation), and are left out of everything that needs tracking: pitch counts, exit velocity, xBA/xSLG/xwOBA, swing and chase rates.'],
     ['Seasons', 'Games from January–July are grouped as Spring; August–December as Fall. Fall data includes intrasquad scrimmages.'],
   ];
   app.innerHTML = `<div class="phead"><div><span class="eyebrow">Reference</span><h1>Glossary</h1></div></div>
@@ -968,9 +986,20 @@ function pageData() {
   <section class="panel"><div class="panel-h"><h2>Seasons</h2><span class="note">Last rebuilt ${esc(new Date(m.built).toLocaleString())}</span></div>
     ${table('t-seasons', [{ k: 'label', label: 'Season', l: true }, { k: 'games', label: 'Games', fmt: F.int }, { k: 'pitches', label: 'Pitches', fmt: F.int }, { k: 'start', label: 'First game', l: true, fmt: v => esc(fmtDate(v, true)) }, { k: 'end', label: 'Last game', l: true, fmt: v => esc(fmtDate(v, true)) }], m.seasons, { nosort: true })}</section>
   <section class="panel"><div class="panel-h"><h2>Files in the data folder</h2><span class="note">Duplicate pitches across files are counted once</span></div>
-    ${table('t-files', [{ k: 'file', label: 'File', l: true }, { k: 'rows', label: 'Rows read', fmt: F.int }, { k: 'status', label: 'Status', l: true }], m.files, { nosort: true })}</section>
+    ${table('t-files', [{ k: 'file', label: 'File', l: true }, { k: 'kind', label: 'Type', l: true }, { k: 'rows', label: 'Rows read', fmt: F.int }, { k: 'status', label: 'Status', l: true },
+      { k: 'notes', label: 'Notes', l: true, html: r => {
+        if (r.kind !== 'Results' || r.status !== 'ok') return '';
+        const bits = [`${esc(fmtDate(r.date, true))} vs ${esc(teamName(r.opp))}, ${r.pa} PA`];
+        const nm = (r.names || []).filter(x => x.as).map(x => `${esc(x.raw)} → ${esc(x.as)}`);
+        const nw = (r.names || []).filter(x => !x.as).map(x => esc(x.raw));
+        if (nm.length) bits.push('Matched: ' + nm.join(', '));
+        if (nw.length) bits.push('New names: ' + nw.join(', '));
+        if (r.unread && r.unread.length) bits.push('Could not read: ' + r.unread.map(esc).join(', '));
+        return `<span style="white-space:normal">${bits.join(' · ')}</span>`;
+      } }], m.files, { nosort: true })}</section>
   <section class="panel prose" style="max-width:none"><h2 style="margin-bottom:8px">Adding new games</h2>
-    <p>Upload TrackMan CSV or Excel exports into the <b>data</b> folder of the GitHub repository (Add file → Upload files). The site rebuilds itself in a couple of minutes. You can upload single games or combined season files; any pitch that appears in more than one file is only counted once.</p></section>`;
+    <p>Upload TrackMan CSV or Excel exports into the <b>data</b> folder of the GitHub repository (Add file → Upload files). The site rebuilds itself in a couple of minutes. You can upload single games or combined season files; any pitch that appears in more than one file is only counted once.</p>
+    <p>For a game without TrackMan, upload a results file with <b>Batter</b>, <b>Balls</b>, <b>Strikes</b> and <b>Result</b> columns, and put the date and opponent in the file name, for example <b>2026-09-26 URI Results.xlsx</b>. Check the Notes column above to confirm each batter matched the right player.</p></section>`;
 }
 
 /* ---------- player search box ---------- */
