@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BirdballSavant</title>
+<meta name="description" content="Boston College Baseball TrackMan data: leaderboards, player pages, pitch arsenals and batted-ball metrics.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="brand" href="#home" aria-label="BirdballSavant home">
+      <span class="brand-a">Birdball</span><span class="brand-b">Savant</span>
+    </a>
+    <nav class="nav" id="nav" aria-label="Main">
+      <a href="#hitting" data-nav="hitting">Hitting</a>
+      <a href="#pitching" data-nav="pitching">Pitching</a>
+      <a href="#arsenal" data-nav="arsenal">Arsenals</a>
+      <a href="#games" data-nav="games">Games</a>
+      <a href="#search" data-nav="search">Pitch Search</a>
+      <a href="#glossary" data-nav="glossary">Glossary</a>
+    </nav>
+    <div class="psearch">
+      <label class="sr" for="psearch-input">Find a player</label>
+      <input id="psearch-input" type="search" placeholder="Find a player" autocomplete="off">
+      <div class="psearch-list" id="psearch-list" hidden></div>
+    </div>
+  </div>
+</header>
+<main id="app" class="wrap" aria-live="polite">
+  <div class="loading">Loading TrackMan data…</div>
+</main>
+<footer class="foot wrap">
+  <span>BirdballSavant · Boston College Baseball · TrackMan</span>
+  <a href="#data" id="foot-built">Data status</a>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
