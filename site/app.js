@@ -607,6 +607,109 @@ function ptChips(id, types, active, onchange) {
   return `<div class="chips" id="${id}">${types.map(k => `<button type="button" class="chip ${active.has(k) ? '' : 'off'}" data-k="${k}" aria-pressed="${active.has(k)}">${ptDot(k)}${PT[k].n}</button>`).join('')}</div>`;
 }
 
+/* ---------- bat tracking charts ---------- */
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo || 1, raw = span / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(st => span / st <= n + 1);
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+const lastName = n => String(n).split(',')[0];
+function placeLabels(items, W, H) {
+  // items: {x, y, r, text}; tries right, left, above, below; skips if every spot collides
+  const boxes = [], out = [];
+  const hit = (a) => boxes.some(b => a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1) || a.x1 < 0 || a.x2 > W || a.y1 < 0 || a.y2 > H;
+  for (const it of items) boxes.push({ x1: it.x - it.r, x2: it.x + it.r, y1: it.y - it.r, y2: it.y + it.r });
+  for (const it of items) {
+    const w = it.text.length * 6.2 + 2, h = 12;
+    const spots = [[it.x + it.r + 3, it.y + 4, 'start'], [it.x - it.r - 3, it.y + 4, 'end'], [it.x, it.y - it.r - 4, 'middle'], [it.x, it.y + it.r + 12, 'middle']];
+    for (const [lx, ly, anchor] of spots) {
+      const x1 = anchor === 'start' ? lx : anchor === 'end' ? lx - w : lx - w / 2;
+      const b = { x1, x2: x1 + w, y1: ly - 10, y2: ly - 10 + h };
+      if (!hit(b)) { boxes.push(b); out.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="dlab">${esc(it.text)}</text>`); break; }
+    }
+  }
+  return out.join('');
+}
+function scatterFrame(W, H, m, xs, ys, xTitle, yTitle, xFmt, yFmt) {
+  let g = '';
+  for (const v of ys.ticks) g += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${ys.f(v)}" y2="${ys.f(v)}"/><text x="${m.l - 6}" y="${ys.f(v) + 4}" text-anchor="end">${yFmt(v)}</text>`;
+  for (const v of xs.ticks) g += `<line class="grid" y1="${m.t}" y2="${H - m.b}" x1="${xs.f(v)}" x2="${xs.f(v)}"/><text x="${xs.f(v)}" y="${H - m.b + 15}" text-anchor="middle">${xFmt(v)}</text>`;
+  g += `<text x="${(m.l + W - m.r) / 2}" y="${H - 4}" text-anchor="middle" class="ttl">${xTitle}</text>`;
+  g += `<text x="12" y="${(m.t + H - m.b) / 2}" text-anchor="middle" class="ttl" transform="rotate(-90 12 ${(m.t + H - m.b) / 2})">${yTitle}</text>`;
+  return g;
+}
+function scale(lo, hi, a, b, n) { const ticks = niceTicks(lo, hi, n); const L = Math.min(lo, ticks[0]), Hh = Math.max(hi, ticks[ticks.length - 1]); return { ticks, f: v => a + (v - L) / (Hh - L || 1) * (b - a) }; }
+
+function batCharts(se, data) {
+  const MIN_SW = 10;
+  const pl = data.filter(o => o.swingsTracked >= MIN_SW && o.batSpd != null);
+  if (pl.length < 2) return `<p class="empty">Charts appear once at least two hitters have ${MIN_SW}+ tracked swings this season.</p>`;
+  const team = stats(se.rows.filter(r => isBC(S.players[r.h]?.t)));
+
+  // 1. Bat speed vs squared-up %
+  const sq = pl.filter(o => o.sqPct != null);
+  let c1 = '';
+  if (sq.length >= 2) {
+    const W = 560, H = 380, m = { l: 48, r: 18, t: 18, b: 40 };
+    const xv = sq.map(o => o.batSpd), yv = sq.map(o => o.sqPct);
+    const xs = scale(Math.min(...xv) - 1, Math.max(...xv) + 1, m.l, W - m.r, 6);
+    const ys = scale(Math.max(0, Math.min(...yv) - .05), Math.min(1, Math.max(...yv) + .05), H - m.b, m.t, 5);
+    const maxSw = Math.max(...sq.map(o => o.swingsTracked));
+    let g = scatterFrame(W, H, m, xs, ys, 'Average bat speed (mph)', 'Squared-up % (per contact)', v => v, v => Math.round(v * 100) + '%');
+    const tx = xs.f(team.batSpd), ty = ys.f(team.sqPct);
+    g += `<line class="avgline" x1="${tx}" x2="${tx}" y1="${m.t}" y2="${H - m.b}"/><line class="avgline" x1="${m.l}" x2="${W - m.r}" y1="${ty}" y2="${ty}"/>`;
+    g += `<text x="${W - m.r - 4}" y="${m.t + 12}" text-anchor="end" class="qlab">Fast &amp; square</text><text x="${m.l + 4}" y="${m.t + 12}" class="qlab">Square, slower bat</text>`;
+    g += `<text x="${W - m.r - 4}" y="${H - m.b - 6}" text-anchor="end" class="qlab">Fast, not square</text><text x="${m.l + 4}" y="${H - m.b - 6}" class="qlab">Slower, not square</text>`;
+    const items = sq.map(o => ({ o, x: xs.f(o.batSpd), y: ys.f(o.sqPct), r: 4 + 6 * Math.sqrt(o.swingsTracked / maxSw), text: lastName(o.name) }));
+    g += items.map(it => `<circle cx="${it.x.toFixed(1)}" cy="${it.y.toFixed(1)}" r="${it.r.toFixed(1)}" class="dot" data-tip="${esc(`<b>${esc(niceName(it.o.name))}</b><br>Bat speed ${F.f1(it.o.batSpd)} mph<br>Squared-up ${F.pct(it.o.sqPct)}%<br>Blast ${F.pct(it.o.blastPct)}%<br>${it.o.swingsTracked} tracked swings`)}"/>`).join('');
+    g += placeLabels(items, W, H);
+    c1 = `<div class="panel"><div class="panel-h"><h2>Bat speed vs. squared-up</h2><span class="note">Dashed lines = BC average · dot size = tracked swings</span></div>${svg(W, H, g, 'Bat speed versus squared-up rate')}</div>`;
+  }
+
+  // 2. Swing path: attack angle vs attack direction
+  const sp = pl.filter(o => o.attackAngle != null && o.attackDir != null);
+  let c2 = '';
+  if (sp.length >= 2) {
+    const W = 560, H = 380, m = { l: 48, r: 18, t: 18, b: 40 };
+    const xv = sp.map(o => o.attackDir), yv = sp.map(o => o.attackAngle);
+    const xr = Math.max(8, ...xv.map(Math.abs)) + 2;
+    const xs = scale(-xr, xr, m.l, W - m.r, 6);
+    const ys = scale(Math.min(0, ...yv) - 2, Math.max(24, ...yv) + 2, H - m.b, m.t, 6);
+    let g = `<rect x="${m.l}" y="${ys.f(20)}" width="${W - m.r - m.l}" height="${ys.f(5) - ys.f(20)}" class="band"/><text x="${m.l + 6}" y="${ys.f(5) - 6}" class="qlab">Ideal attack angle 5°–20°</text>`;
+    g += scatterFrame(W, H, m, xs, ys, '← Opposite field · Attack direction (°) · Pull side →', 'Attack angle (°)', v => Math.abs(v), v => v + '°');
+    g += `<line class="avgline" x1="${xs.f(0)}" x2="${xs.f(0)}" y1="${m.t}" y2="${H - m.b}"/>`;
+    const items = sp.map(o => ({ o, x: xs.f(o.attackDir), y: ys.f(o.attackAngle), r: 6, text: lastName(o.name) }));
+    g += items.map(it => `<circle cx="${it.x.toFixed(1)}" cy="${it.y.toFixed(1)}" r="${it.r}" class="dot" data-tip="${esc(`<b>${esc(niceName(it.o.name))}</b><br>Attack angle ${F.f1(it.o.attackAngle)}°<br>Ideal AA ${F.pct(it.o.idealAA)}%<br>Attack direction ${Math.abs(it.o.attackDir).toFixed(1)}° ${it.o.attackDir >= 0 ? 'pull' : 'oppo'}`)}"/>`).join('');
+    g += placeLabels(items, W, H);
+    c2 = `<div class="panel"><div class="panel-h"><h2>Swing path</h2><span class="note">Average attack angle and direction at contact</span></div>${svg(W, H, g, 'Attack angle versus attack direction')}</div>`;
+  }
+
+  // 3. Bat speed distribution by hitter
+  const rowsP = [...pl].sort((a, b) => b.batSpd - a.batSpd);
+  const swings = new Map(rowsP.map(o => [o.i, (se.byH.get(o.i) || []).filter(r => r.bat != null && r.bat >= 50 && r.sw).map(r => r.bat)]));
+  const allSw = [...swings.values()].flat();
+  const W = 1100, rowH = 26, m = { l: 150, r: 24, t: 10, b: 36 }, H = m.t + rowsP.length * rowH + m.b;
+  const xs = scale(Math.floor(Math.min(...allSw)), Math.ceil(Math.max(...allSw)), m.l, W - m.r, 8);
+  let g = '';
+  for (const v of xs.ticks) g += `<line class="grid" x1="${xs.f(v)}" x2="${xs.f(v)}" y1="${m.t}" y2="${H - m.b}"/><text x="${xs.f(v)}" y="${H - m.b + 15}" text-anchor="middle">${v}</text>`;
+  g += `<line class="avgline" x1="${xs.f(team.batSpd)}" x2="${xs.f(team.batSpd)}" y1="${m.t}" y2="${H - m.b}"/>`;
+  g += `<text x="${(m.l + W - m.r) / 2}" y="${H - 4}" text-anchor="middle" class="ttl">Bat speed (mph) · dashed line = BC average ${F.f1(team.batSpd)}</text>`;
+  rowsP.forEach((o, k) => {
+    const cy = m.t + k * rowH + rowH / 2;
+    if (k % 2 === 0) g += `<rect x="${m.l}" y="${cy - rowH / 2}" width="${W - m.r - m.l}" height="${rowH}" class="stripe"/>`;
+    g += `<text x="${m.l - 10}" y="${cy + 4}" text-anchor="end" class="rowlab">${esc(niceName(o.name))}</text>`;
+    const sw = swings.get(o.i) || [];
+    g += sw.map((v, n) => `<circle cx="${xs.f(v).toFixed(1)}" cy="${(cy + ((n * 7) % 11) - 5).toFixed(1)}" r="2.6" class="swing"/>`).join('');
+    g += `<rect x="${(xs.f(o.batTop) - 1.5).toFixed(1)}" y="${cy - 9}" width="3" height="18" rx="1.5" class="topmark" data-tip="${esc(`<b>${esc(niceName(o.name))}</b><br>Top-10% bat speed ${F.f1(o.batTop)} mph`)}"/>`;
+    g += `<rect x="${(xs.f(o.batSpd) - 6).toFixed(1)}" y="${cy - 6}" width="12" height="12" rx="2" transform="rotate(45 ${xs.f(o.batSpd).toFixed(1)} ${cy})" class="avgmark" data-tip="${esc(`<b>${esc(niceName(o.name))}</b><br>Average ${F.f1(o.batSpd)} mph · max ${F.f1(o.maxBat)}<br>Fast-swing ${F.pct(o.fastPct)}% · ${o.swingsTracked} swings`)}"/>`;
+  });
+  const c3 = `<div class="panel"><div class="panel-h"><h2>Bat speed by hitter</h2><span class="note">Each dot is one tracked swing (50+ mph)</span></div>
+    <div style="overflow-x:auto">${svg(W, H, g, 'Bat speed distribution by hitter').replace('class="chart"', 'class="chart" style="min-width:640px"')}</div>
+    <div class="legend"><span><i class="lg-swing"></i>Swing</span><span><i class="lg-avg"></i>Average</span><span><i class="lg-top"></i>Top-10% average</span></div></div>`;
+  return `<section class="grid2">${c1}${c2}</section>${c3}<p class="muted small" style="margin:0">Charts include hitters with ${MIN_SW}+ tracked swings who meet the Min PA filter above.</p>`;
+}
+
 /* ---------- pages ---------- */
 function setNav(r) { $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === r)); }
 
@@ -767,6 +870,7 @@ async function pageLeaders(kind) {
   <div class="controls">${segmented('lb-view', viewOpts, ui.view, v => { ui.view = v; route(); })}
     ${ui.view === 'bat' ? `<span class="muted small">Bat tracking was on in ${new Set(se.rows.filter(r => r.bat != null).map(r => r.g)).size} of ${se.games.length} games this season</span>` : ''}
     <span class="muted small">${data.length} of ${T.rows.length} players · qualified = ${T.q}+ ${isHit ? 'PA' : 'batters faced'} · click a column to sort${isHit && se.games.some(g => g.nt) ? ` · includes ${se.games.filter(g => g.nt).length} results-only game(s) in counting stats` : ''}</span></div>
+  ${isHit && ui.view === 'bat' ? batCharts(se, data) : ''}
   ${table(tid, [nameCol, ...(isHit ? [{ k: 'bats', label: 'B', fmt: F.str }] : [{ k: 'throws', label: 'T', fmt: F.str }]), ...vcols], data, { total })}`;
   const mi = $('#lb-min'); mi.onchange = () => { ui.min = Math.max(0, +mi.value || 0); route(); };
 }
@@ -1315,7 +1419,7 @@ function pageData() {
       } }], m.files, { nosort: true })}</section>
   ${m.ncaa?.report ? `<section class="panel"><div class="panel-h"><h2>TruMedia</h2><span class="note">Last run ${esc(new Date(m.ncaa.report.ran).toLocaleString())}</span></div>
     <p style="margin:0 0 10px"><b>${esc(m.ncaa.report.status)}</b></p>
-    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}</p>`).join('')}
+    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}</p>`).join('')}
   </section>` : ''}
   ${(m.corrections || []).length ? `<section class="panel"><div class="panel-h"><h2>TrackMan corrections</h2><span class="note">From scripts/corrections.json</span></div>
     ${table('t-corr', [{ k: 'batter', label: 'Batter', l: true }, { k: 'date', label: 'Date', l: true, fmt: v => esc(fmtDate(v, true)) }, { k: 'pitchno', label: 'Pitch #', fmt: F.int }, { k: 'note', label: 'Fix', l: true, html: r => `<span style="white-space:normal">${esc(r.note || '')}</span>` }, { k: 'applied', label: 'Status', l: true, fmt: v => v ? 'Applied' : 'Pitch not found' }], m.corrections, { nosort: true })}</section>` : ''}
@@ -1326,6 +1430,20 @@ function pageData() {
 }
 
 /* ---------- player search box ---------- */
+function initTooltips() {
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true; document.body.appendChild(tip);
+  const show = (el, x, y) => {
+    tip.innerHTML = el.getAttribute('data-tip'); tip.hidden = false;
+    const r = tip.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+    let left = x + 14, top = y + 14;
+    if (left + r.width > vw - 8) left = x - r.width - 14;
+    if (top + r.height > window.innerHeight - 8) top = y - r.height - 14;
+    tip.style.left = Math.max(8, left) + 'px'; tip.style.top = Math.max(8, top) + 'px';
+  };
+  document.addEventListener('pointermove', e => { const el = e.target.closest?.('[data-tip]'); if (el) show(el, e.clientX, e.clientY); else tip.hidden = true; });
+  document.addEventListener('pointerdown', e => { const el = e.target.closest?.('[data-tip]'); if (el) show(el, e.clientX, e.clientY); else tip.hidden = true; });
+  window.addEventListener('scroll', () => { tip.hidden = true; }, { passive: true });
+}
 function initSearch() {
   const inp = $('#psearch-input'), list = $('#psearch-list');
   let act = -1, items = [];
@@ -1380,6 +1498,7 @@ window.addEventListener('hashchange', () => { const changedPage = location.hash 
     return;
   }
   initSearch();
+  initTooltips();
   lastHash = location.hash;
   route();
 })();
