@@ -275,3 +275,26 @@ dl.gloss dd { margin: 0; color: var(--muted); }
 .legend .lg-out { background: transparent; border: 1.5px solid var(--link); }
 .batgrid .panel { display: flex; flex-direction: column; }
 .batgrid .panel .chart { margin-top: auto; }
+
+/* Player game breakdown */
+.pg-strip { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85; }
+.loglink { white-space: nowrap; }
+.pa-list { display: grid; gap: 14px; }
+.pa-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.pa-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.pa-n { font-family: var(--f-display); font-weight: 800; font-size: 1.15rem; color: var(--gold-ink); min-width: 1.6em; }
+.pa-inn { font-family: var(--f-display); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.pa-vs { font-weight: 600; }
+.pa-res { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pa-pc { margin-left: auto; }
+.pa-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 10px 12px; align-items: start; }
+.pa-zone { max-width: 170px; }
+.pa-tbl { border: 0; }
+.pa-tbl td, .pa-tbl th { padding: 5px 8px; }
+.pa-tbl tr.pa-end td { font-weight: 600; }
+.chart .sq text { fill: #fff; font-size: 11px; font-weight: 700; pointer-events: none; }
+.chart .sq circle { stroke: var(--surface); stroke-width: 1.5; cursor: pointer; }
+.chart .sq.inplay circle { stroke: var(--ink); stroke-width: 2.5; }
+.chart .sq.whiff circle { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 3 2; }
+@media (max-width: 640px) { .pa-body { grid-template-columns: minmax(0, 1fr); } .pa-zone { margin-inline: auto; } .pa-pc { margin-left: 0; } }

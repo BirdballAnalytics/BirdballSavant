@@ -1285,8 +1285,8 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   ${playerExecution(i, se, me)}
   <section><div class="panel-h"><h2>Splits</h2><span class="note">${esc(se.label)}</span></div>
     ${table('t-ph-split', [{ k: 'name', label: 'Split', l: true }, C.PA, C.avg, C.obp, C.slg, C.woba, C.xwoba, C.kPct, C.bbPct, C.whiff, C.chase, C.avgEV, C.hhPct], splits, { nosort: true })}</section>
-  <section><div class="panel-h"><h2>Game log</h2><span class="note">${esc(se.label)}</span></div>
-    ${table('t-ph-log', [{ k: 'd', label: 'Date', l: true, html: r => `<a href="#game-${se.id}-${r.g}">${esc(fmtDate(r.d))}</a>` }, { k: 'opp', label: 'Opp', l: true }, C.PA, C.AB, C.H, C['2B'], C.HR, C.BB, C.K, C.bbe, C.avgEV, C.maxEV, C.xwoba], glog, { sort: 'd', asc: false })}</section>`;
+  <section><div class="panel-h"><h2>Game log</h2><span class="note">${esc(se.label)} · click a date for the pitch-by-pitch breakdown</span></div>
+    ${table('t-ph-log', [{ k: 'd', label: 'Date', l: true, html: r => logLink(se, r, 'hit', i) }, { k: 'opp', label: 'Opp', l: true }, C.PA, C.AB, C.H, C['2B'], C.HR, C.BB, C.K, C.bbe, C.avgEV, C.maxEV, C.xwoba], glog, { sort: 'd', asc: false })}</section>`;
 }
 
 function playerExecution(i, se, me) {
@@ -1347,8 +1347,8 @@ function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
   <section class="panel"><div class="panel-h"><h2>Pitch mix by count</h2><span class="note">Bar width = share of pitches; number = pitches</span></div>${usageByCount(rows)}
     <div class="legend">${types.map(k => `<span><i style="background:${PT[k].c}"></i>${PT[k].n}</span>`).join('')}</div></section>
   <section class="panel"><div class="panel-h"><h2>Velocity by outing</h2><span class="note">${esc(se.label)}</span></div>${veloTrend(rows)}</section>
-  <section><div class="panel-h"><h2>Game log</h2><span class="note">${esc(se.label)}</span></div>
-    ${table('t-pp-log', [{ k: 'd', label: 'Date', l: true, html: r => `<a href="#game-${se.id}-${r.g}">${esc(fmtDate(r.d))}</a>` }, { k: 'opp', label: 'Opp', l: true }, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, C.whiff, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba], glog, { sort: 'd', asc: false })}</section>`;
+  <section><div class="panel-h"><h2>Game log</h2><span class="note">${esc(se.label)} · click a date for the pitch-by-pitch breakdown</span></div>
+    ${table('t-pp-log', [{ k: 'd', label: 'Date', l: true, html: r => logLink(se, r, 'pit', i) }, { k: 'opp', label: 'Opp', l: true }, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, C.whiff, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba], glog, { sort: 'd', asc: false })}</section>`;
 }
 function redrawPitcherCharts(rows, ui) {
   const mv = $('#mvbox'), lb = $('#locbox'), rb = $('#relbox');
@@ -1361,6 +1361,132 @@ function bindPlayer(i, p, role, ui) {
   const zm = $('#zm');
   if (zm) zm.onchange = () => { ui.zm = zm.value; const se = S.seasons[ui.season]; $('#zbox').innerHTML = zoneChart(se.byH.get(i) || [], ui.zm, 'hit'); };
 }
+/* ---------- player game breakdown (pitch by pitch) ---------- */
+function logLink(se, r, role, i) {
+  const gm = se.games[r.g];
+  if (gm.nt) return `<a href="#game-${se.id}-${r.g}" title="Results-only game">${esc(fmtDate(r.d))}</a>`;
+  return `<a href="#pg-${se.id}-${r.g}-${role}-${esc(S.players[i].k)}" class="loglink">${esc(fmtDate(r.d))} <span aria-hidden="true">›</span></a>`;
+}
+function groupPAs(rows) {
+  const out = []; let cur = null, key = null;
+  for (const r of rows) {
+    const k = `${r.inn}|${r.top}|${r.pa}|${r.h}|${r.p}`;
+    if (k !== key || !cur) { cur = { rows: [] }; out.push(cur); key = k; }
+    cur.rows.push(r);
+    if (r.r) { key = null; }   // PA ended on this pitch
+  }
+  return out;
+}
+function pitchDesc(r) { return r.r ? RES_NAME[r.r] || r.r : CALL_NAME[r.c] || '—'; }
+function seqChart(pitches) {
+  const W = 230, H = 250, X = v => 115 + v * 52, Y = v => 222 - (v - 0.2) * 52;
+  let g = `<rect class="zone" x="${X(-ZW)}" y="${Y(ZT)}" width="${X(ZW) - X(-ZW)}" height="${Y(ZB) - Y(ZT)}"/>`;
+  for (let k = 1; k < 3; k++) {
+    g += `<line class="grid" x1="${X(-ZW + k * 2 * ZW / 3)}" x2="${X(-ZW + k * 2 * ZW / 3)}" y1="${Y(ZT)}" y2="${Y(ZB)}"/>`;
+    g += `<line class="grid" y1="${Y(ZB + k * (ZT - ZB) / 3)}" y2="${Y(ZB + k * (ZT - ZB) / 3)}" x1="${X(-ZW)}" x2="${X(ZW)}"/>`;
+  }
+  g += `<path class="plate" d="M${X(-0.71)},${H - 8} h${1.42 * 52} v-5 l-${1.42 * 26},-5 l-${1.42 * 26},5 Z"/>`;
+  pitches.forEach((r, n) => {
+    if (r.px == null || r.pz == null) return;
+    const x = X(Math.max(-2, Math.min(2, r.px))), y = Y(Math.max(0.1, Math.min(4.6, r.pz)));
+    const cls = r.c === 'X' ? 'sq inplay' : r.wh ? 'sq whiff' : 'sq';
+    g += `<g class="${cls}" data-tip="${esc(`<b>Pitch ${n + 1}</b> · ${r.b}-${r.s}<br>${esc(PT[r.pt].n)} ${F.f1(r.v)} mph<br>${esc(pitchDesc(r))}`)}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9" fill="${PT[r.pt].c}"/><text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle">${n + 1}</text></g>`;
+  });
+  return svg(W, H, g, 'Pitch sequence, catcher\'s view');
+}
+function paCard(pa, role, n) {
+  const rs = pa.rows, last = rs[rs.length - 1], first = rs[0];
+  const opp = role === 'hit' ? first.p : first.h;
+  const oppHand = role === 'hit' ? (first.th ? `${first.th}HP` : '') : (first.bs ? `${first.bs}HH` : '');
+  const outs = first.o != null ? `${first.o} out${first.o === 1 ? '' : 's'}` : '';
+  const bb = rs.find(r => r.c === 'X' && r.ev != null);
+  const res = last.r ? resBadge(last.r) : '<span class="muted small">No result recorded</span>';
+  const rows = rs.map((r, k) => `<tr class="${r.r ? 'pa-end' : ''}">
+      <td>${k + 1}</td><td>${r.b}-${r.s}</td>
+      <td class="l">${ptDot(r.pt)}${esc(PT[r.pt].n)}</td>
+      <td>${F.f1(r.v)}</td><td>${F.int(r.spin)}</td><td>${F.f1(r.ivb)}</td><td>${F.f1(r.hb)}</td>
+      <td class="l">${r.iz == null ? '—' : r.iz ? 'Zone' : '<span class="muted">Out</span>'}</td>
+      <td class="l">${r.r ? resBadge(r.r) : esc(CALL_NAME[r.c] || '—')}</td>
+      <td>${r.c === 'X' ? F.f1(r.ev) : ''}</td><td>${r.c === 'X' ? F.f1(r.la) : ''}</td><td>${r.c === 'X' ? F.int(r.dist) : ''}</td>
+      <td>${r.bat != null && r.sw ? F.f1(r.bat) : ''}</td></tr>`).join('');
+  return `<article class="pa-card">
+    <header class="pa-head">
+      <span class="pa-n">${n}</span>
+      <span class="pa-inn">${first.top ? 'Top' : 'Bot'} ${F.int(first.inn)}${outs ? ' · ' + outs : ''}</span>
+      <span class="pa-vs">${role === 'hit' ? 'vs' : 'to'} ${plink(opp)} <span class="muted small">${esc(oppHand)}</span></span>
+      <span class="pa-res">${res}${bb ? ` <span class="muted small">${F.f1(bb.ev)} mph · ${F.f1(bb.la)}°${bb.dist != null ? ' · ' + F.int(bb.dist) + ' ft' : ''}${bb.xw != null ? ' · xwOBA ' + F.avg(bb.xw) : ''}</span>` : ''}</span>
+      <span class="pa-pc muted small">${rs.length} pitch${rs.length === 1 ? '' : 'es'}</span>
+    </header>
+    <div class="pa-body">
+      <div class="pa-zone">${seqChart(rs)}</div>
+      <div class="tbl-wrap pa-tbl"><table><thead><tr><th class="nosort">#</th><th class="nosort">Count</th><th class="l nosort">Pitch</th><th class="nosort">Velo</th><th class="nosort">Spin</th><th class="nosort">IVB</th><th class="nosort">HB</th><th class="l nosort">Loc</th><th class="l nosort">Result</th><th class="nosort">EV</th><th class="nosort">LA</th><th class="nosort">Dist</th><th class="nosort">Bat Spd</th></tr></thead><tbody>${rows}</tbody></table></div>
+    </div>
+  </article>`;
+}
+function veloByPitch(rows) {
+  const pts = rows.map((r, n) => ({ n: n + 1, r })).filter(o => o.r.v != null);
+  if (pts.length < 2) return '';
+  const W = 560, H = 230, m = { l: 52, r: 12, t: 14, b: 34 };
+  const xs = scale(1, pts[pts.length - 1].n, m.l, W - m.r, 8), vv = pts.map(o => o.r.v);
+  const ys = scale(Math.floor(Math.min(...vv)) - 1, Math.ceil(Math.max(...vv)) + 1, H - m.b, m.t, 5);
+  let g = scatterFrame(W, H, m, xs, ys, 'Pitch # in game', 'Velo (mph)', v => v, v => (Number.isInteger(v) ? v : v.toFixed(1)));
+  const by = {}; pts.forEach(o => (by[o.r.pt] = by[o.r.pt] || []).push(o));
+  for (const k of Object.keys(by)) {
+    const a = by[k];
+    if (a.length > 1) g += `<path d="M${a.map(o => `${xs.f(o.n).toFixed(1)},${ys.f(o.r.v).toFixed(1)}`).join(' L')}" fill="none" stroke="${PT[k].c}" stroke-width="1.5" stroke-opacity=".5"/>`;
+    g += a.map(o => `<circle cx="${xs.f(o.n).toFixed(1)}" cy="${ys.f(o.r.v).toFixed(1)}" r="4" fill="${PT[k].c}" stroke="var(--surface)" stroke-width="1.5" data-tip="${esc(`Pitch ${o.n} · ${esc(PT[k].n)} ${F.f1(o.r.v)} mph<br>${esc(pitchDesc(o.r))}`)}"/>`).join('');
+  }
+  return `<div class="panel"><div class="panel-h"><h2>Velocity by pitch</h2></div>${svg(W, H, g, 'Velocity by pitch number')}
+    <div class="legend">${Object.keys(by).map(k => `<span><i style="background:${PT[k].c}"></i>${PT[k].n}</span>`).join('')}</div></div>`;
+}
+async function pagePlayerGame(sid, gi, role, key) {
+  setNav('');
+  const se = await loadSeason(sid), g = se.games[gi], i = S.pidx.get(key);
+  if (!g || i == null) { app.innerHTML = '<p class="err">That game or player was not found.</p>'; return; }
+  const p = S.players[i];
+  const rows = se.rows.filter(r => r.g === gi && (role === 'hit' ? r.h === i : r.p === i));
+  const opp = g.opp ? `${g.home ? 'vs' : '@'} ${teamName(g.opp)}` : 'Intrasquad';
+  // prev / next games for this player in the season
+  const mine = [...new Set((role === 'hit' ? se.byH.get(i) : se.byP.get(i) || []).filter(r => !se.games[r.g].nt).map(r => r.g))].sort((a, b) => a - b);
+  const pos = mine.indexOf(gi), prev = mine[pos - 1], next = mine[pos + 1];
+  const nav = `<div class="controls">
+    ${prev != null ? `<a class="btn" href="#pg-${sid}-${prev}-${role}-${esc(key)}">‹ ${esc(fmtDate(se.games[prev].d))}</a>` : ''}
+    ${next != null ? `<a class="btn" href="#pg-${sid}-${next}-${role}-${esc(key)}">${esc(fmtDate(se.games[next].d))} ›</a>` : ''}
+    <a class="btn" href="#game-${sid}-${gi}">Full game</a></div>`;
+  const head = `<div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${esc(opp)} · ${role === 'hit' ? 'Hitting' : 'Pitching'}</span>
+    <h1><a href="#player-${esc(key)}" class="plain">${p.num != null ? `<span class="jersey">#${esc(p.num)}</span>` : ''}${esc(niceName(p.n))}</a></h1></div>${nav}</div>`;
+  if (!rows.length) { app.innerHTML = head + '<p class="empty">No tracked pitches for this player in this game.</p>'; return; }
+  const st = stats(rows), pas = groupPAs(rows);
+  let tiles, extra;
+  if (role === 'hit') {
+    tiles = [[`${st.H}-${st.AB}`, 'H-AB'], [F.int(st.PA), 'PA'], [F.int(st.BB + st.HBP), 'BB + HBP'], [F.int(st.K), 'SO'], [F.int(st.pitches), 'Pitches seen'],
+      [F.int(Math.round((st.swing || 0) * st.pitches)), 'Swings'], [F.int(Math.round((st.whiff || 0) * (st.swing || 0) * st.pitches)), 'Whiffs'], [F.pct(st.chase), 'Chase %'],
+      [F.f1(st.maxEV), 'Max EV'], [F.avg(st.xwoba), 'xwOBA']];
+    extra = `<section class="grid2">
+      <div class="panel"><div class="panel-h"><h2>Pitches seen</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
+        <div class="legend">${[...new Set(rows.map(r => r.pt))].map(k => `<span><i style="background:${PT[k].c}"></i>${PT[k].n}</span>`).join('')}</div></div>
+      <div class="panel"><div class="panel-h"><h2>Balls in play</h2></div><div class="chart-box">${sprayChart(rows)}</div></div></section>`;
+  } else {
+    const ps = pitchShape(rows), strikes = rows.filter(r => ['C', 'S', 'F', 'X'].includes(r.c)).length;
+    tiles = [[F.ip(st.outs), 'IP'], [F.int(st.PA), 'Batters'], [F.int(st.pitches), 'Pitches'], [F.pct(strikes / rows.length), 'Strike %'], [F.int(st.K), 'SO'],
+      [F.int(st.BB + st.HBP), 'BB + HBP'], [F.int(st.H), 'H'], [F.int(Math.round((st.whiff || 0) * (st.swing || 0) * st.pitches)), 'Whiffs'], [F.pct(st.csw), 'CSW %'], [F.f1(ps.maxVelo), 'Max velo']];
+    const ars = arsenal(rows);
+    extra = `<section><div class="panel-h"><h2>Pitch mix</h2></div>${table('t-pg-ars', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
+      { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int },
+      { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'whiff', label: 'Whiff%', fmt: F.pct },
+      { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'avgEV', label: 'EV', fmt: F.f1 }], ars, { sort: 'n' })}</section>
+      <section class="grid2">
+        <div class="panel"><div class="panel-h"><h2>Pitch locations</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
+          <div class="legend">${ars.map(a => `<span><i style="background:${PT[a.pt].c}"></i>${PT[a.pt].n}</span>`).join('')}</div></div>
+        ${veloByPitch(rows)}</section>`;
+  }
+  app.innerHTML = head + `
+    <div class="strip pg-strip">${tiles.map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div>
+    ${extra}
+    <section><div class="panel-h"><h2>${role === 'hit' ? 'Every at-bat' : 'Every batter faced'}</h2><span class="note">Numbers on the zone match the pitch order · catcher's view · hover a pitch for details</span></div>
+      <div class="pa-list">${pas.map((pa, n) => paCard(pa, role, n + 1)).join('')}</div></section>`;
+}
+
 function gameLog(rows, se, side) {
   const m = new Map(); rows.forEach(r => { if (!m.has(r.g)) m.set(r.g, []); m.get(r.g).push(r); });
   return [...m].map(([g, a]) => {
@@ -1573,6 +1699,7 @@ async function route() {
     else if (h === 'games') await pageGames();
     else if (h.startsWith('game-')) { const m = h.match(/^game-(.+)-(\d+)$/); if (m) await pageGame(m[1], +m[2]); }
     else if (h.startsWith('player-')) await pagePlayer(h.slice(7));
+    else if (h.startsWith('pg-')) { const m = h.match(/^pg-(\d{4}-(?:spring|fall))-(\d+)-(hit|pit)-(.+)$/); if (m) await pagePlayerGame(m[1], +m[2], m[3], m[4]); }
     else if (h === 'search') await pageSearch();
     else if (h === 'ncaa') await pageNcaa();
     else if (h.startsWith('ncaa-p-')) { const m = h.match(/^ncaa-p-(\d{4})-(hitting|pitching)-(.+)$/); if (m) await pageNcaaPlayer(+m[1], m[2], m[3]); }
