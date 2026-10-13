@@ -189,13 +189,13 @@ function stats(rows) {
     pullPct: d(t.pull, t.dirN), centPct: d(t.cent, t.dirN), oppoPct: d(t.oppo, t.dirN),
     swing: d(t.sw, t.pitches), whiff: d(t.wh, t.sw), zone: d(t.zn, t.locN), zswing: d(t.zsw, t.zn), chase: d(t.osw, t.ozn),
     zcontact: d(t.zcon, t.zsw), contact: d(t.sw - t.wh, t.sw), fpSwing: d(t.fps, t.fpN), fpStrike: d(t.fpk, t.fpN), csw: d(t.csw, t.pitches),
-    batSpd: t.bats.length >= 5 ? mean(t.bats) : null, maxBat: t.bats.length ? Math.max(...t.bats) : null, swingsTracked: t.bats.length,
-    batTop: t.bats.length >= 5 ? mean([...t.bats].sort((a, b) => b - a).slice(0, Math.max(1, Math.ceil(t.bats.length * 0.1)))) : null,
-    fastPct: t.bats.length >= 5 ? t.fast / t.bats.length : null,
-    attackAngle: t.vats.length >= 5 ? mean(t.vats) : null, idealAA: t.vats.length >= 5 ? t.ideal / t.vats.length : null,
-    attackDir: t.hats.length >= 5 ? mean(t.hats) : null,
+    batSpd: t.bats.length ? mean(t.bats) : null, maxBat: t.bats.length ? Math.max(...t.bats) : null, swingsTracked: t.bats.length,
+    batTop: t.bats.length ? mean([...t.bats].sort((a, b) => b - a).slice(0, Math.max(1, Math.ceil(t.bats.length * 0.1)))) : null,
+    fastPct: t.bats.length ? t.fast / t.bats.length : null,
+    attackAngle: t.vats.length ? mean(t.vats) : null, idealAA: t.vats.length ? t.ideal / t.vats.length : null,
+    attackDir: t.hats.length ? mean(t.hats) : null,
     k2win: d(t.k2W, t.k2PA), k2PA: t.k2PA, k2W: t.k2W,
-    sqPct: t.sqN >= 5 ? t.sq / t.sqN : null, blastPct: t.sqN >= 5 ? t.blast / t.sqN : null, contactsTracked: t.sqN,
+    sqPct: t.sqN ? t.sq / t.sqN : null, blastPct: t.sqN ? t.blast / t.sqN : null, contactsTracked: t.sqN,
     runs: t.runs, outs: t.outs, maxDist: t.dists.length ? Math.max(...t.dists) : null,
   };
   o.ops = o.obp != null && o.slg != null ? o.obp + o.slg : null;
@@ -461,7 +461,8 @@ function zoneChart(rows, metric, side) {
   const W = 300, H = 330, x0 = 150, sx = 72, zy = v => 300 - (v - 0.6) * 72;
   const X = v => x0 + v * sx;
   const zs = {};
-  for (const r of rows) { if (r.z == null) continue; (zs[r.z] = zs[r.z] || []).push(r); }
+  // mirrored left/right (pitcher's view)
+  for (const r of rows) { const z = r.px == null ? null : zone13(-r.px, r.pz); if (z == null) continue; (zs[z] = zs[z] || []).push(r); }
   const val = list => {
     if (!list || !list.length) return null;
     const st = stats(list);
@@ -642,9 +643,8 @@ function scatterFrame(W, H, m, xs, ys, xTitle, yTitle, xFmt, yFmt) {
 function scale(lo, hi, a, b, n) { const ticks = niceTicks(lo, hi, n); const L = Math.min(lo, ticks[0]), Hh = Math.max(hi, ticks[ticks.length - 1]); return { ticks, lo: L, hi: Hh, f: v => a + (v - L) / (Hh - L || 1) * (b - a) }; }
 
 function batCharts(se, data) {
-  const MIN_SW = 10;
-  const pl = data.filter(o => o.swingsTracked >= MIN_SW && o.batSpd != null);
-  if (pl.length < 2) return `<p class="empty">Charts appear once at least two hitters have ${MIN_SW}+ tracked swings this season.</p>`;
+  const pl = data.filter(o => o.PA >= MIN_PA && o.swingsTracked > 0 && o.batSpd != null);
+  if (pl.length < 2) return `<p class="empty">Charts appear once at least two hitters with ${MIN_PA}+ PA have tracked swings this season.</p>`;
   const team = stats(se.rows.filter(r => isBC(S.players[r.h]?.t)));
 
   // 1. Bat speed vs squared-up %
@@ -707,15 +707,14 @@ function batCharts(se, data) {
   const c3 = `<div class="panel"><div class="panel-h"><h2>Bat speed by hitter</h2><span class="note">Each dot is one tracked swing (50–95 mph)</span></div>
     <div style="overflow-x:auto">${svg(W, H, g, 'Bat speed distribution by hitter').replace('class="chart"', 'class="chart" style="min-width:640px"')}</div>
     <div class="legend"><span><i class="lg-swing"></i>Swing</span><span><i class="lg-avg"></i>Average</span><span><i class="lg-top"></i>Top-10% average</span></div></div>`;
-  return `<section class="grid2">${c1}${c2}</section>${c3}<p class="muted small" style="margin:0">Charts include hitters with ${MIN_SW}+ tracked swings who meet the Min PA filter above.</p>`;
+  return `<section class="grid2">${c1}${c2}</section>${c3}<p class="muted small" style="margin:0">Charts include hitters with ${MIN_PA}+ PA who have tracked swings and meet the Min PA filter above.</p>`;
 }
 
 /* ---------- bat tracking: single hitter ---------- */
 function playerBatCharts(i, se) {
-  const MIN = 10;
   const sw = (se.byH.get(i) || []).filter(r => r.bat != null && r.bat >= 50 && r.bat <= 95 && r.sw);
-  if (sw.length < MIN) return '';
   const me = stats(se.byH.get(i) || []);
+  if (me.PA < MIN_PA || !sw.length) return '';
   const team = stats(se.rows.filter(r => isBC(S.players[r.h]?.t)));
   const nm = esc(niceName(pname(i)));
 
@@ -750,7 +749,7 @@ function playerBatCharts(i, se) {
   // 2. Swing path, one dot per swing
   const pts = sw.filter(r => r.vat != null && r.hat != null && r.bs).map(r => ({ r, x: r.bs === 'L' ? r.hat : -r.hat, y: r.vat }));
   let c2 = '';
-  if (pts.length >= MIN) {
+  if (pts.length) {
     const W = 420, H = 340, m = { l: 44, r: 12, t: 18, b: 40 };
     const xr = Math.min(60, Math.max(20, ...pts.map(p => Math.abs(p.x)))) + 2;
     const ys = scale(Math.max(-30, Math.min(-5, ...pts.map(p => p.y))) - 2, Math.min(50, Math.max(30, ...pts.map(p => p.y))) + 2, H - m.b, m.t, 6);
@@ -768,7 +767,7 @@ function playerBatCharts(i, se) {
   // 3. Bat speed vs squared-up %, one dot per tracked contact
   const con = sw.filter(r => r.c === 'X' && r.ev != null && r.v != null && r.ht !== 'BU').map(r => ({ r, x: r.bat, y: r.ev / (1.23 * r.bat + 0.23 * r.v) }));
   let c3 = '';
-  if (con.length >= 5) {
+  if (con.length) {
     const W = 420, H = 340, m = { l: 44, r: 12, t: 18, b: 40 };
     const xs = scale(Math.min(...con.map(p => p.x)) - 1, Math.max(...con.map(p => p.x)) + 1, m.l, W - m.r, 6);
     const yLo = Math.max(0, Math.min(0.6, Math.floor(Math.min(...con.map(p => p.y)) * 10) / 10));
@@ -846,11 +845,11 @@ async function pageHome() {
     <div class="leaders">
       <div class="lcard"><h3>xwOBA</h3><ol>${top(qh, 'xwoba', 5, -1, F.avg)}</ol></div>
       <div class="lcard"><h3>Avg Exit Velo</h3><ol>${top(qh, 'avgEV', 5, -1, F.f1)}</ol></div>
-      <div class="lcard"><h3>Max Exit Velo</h3><ol>${top(H.rows, 'maxEV', 5, -1, F.f1)}</ol></div>
+      <div class="lcard"><h3>Max Exit Velo</h3><ol>${top(qh, 'maxEV', 5, -1, F.f1)}</ol></div>
       <div class="lcard"><h3>Hard-Hit %</h3><ol>${top(qh, 'hhPct', 5, -1, F.pct)}</ol></div>
       <div class="lcard"><h3>Pitcher Whiff %</h3><ol>${top(qp, 'whiff', 5, -1, F.pct)}</ol></div>
       <div class="lcard"><h3>Pitcher K %</h3><ol>${top(qp, 'kPct', 5, -1, F.pct)}</ol></div>
-      <div class="lcard"><h3>Max Velocity</h3><ol>${top(P.rows, 'maxVelo', 5, -1, F.f1)}</ol></div>
+      <div class="lcard"><h3>Max Velocity</h3><ol>${top(qp, 'maxVelo', 5, -1, F.f1)}</ol></div>
       <div class="lcard"><h3>Lowest xwOBA allowed</h3><ol>${top(qp, 'xwoba', 5, 1, F.avg)}</ol></div>
     </div>
   </section>
@@ -955,10 +954,11 @@ async function pageLeaders(kind) {
 async function pageArsenal() {
   setNav('arsenal');
   const se = await loadSeason(S.season);
-  const ui = S.ui.ars || (S.ui.ars = { pt: 'all', min: 15 });
+  const ui = S.ui.ars || (S.ui.ars = { pt: 'all', min: 1 });
   const rows = [];
   for (const [i, prs] of se.byP) {
     const p = S.players[i]; if (!p.bc) continue;
+    if (prs.filter(r => r.r).length < MIN_PA) continue;   // 5+ batters faced
     for (const a of arsenal(prs)) if (a.n >= ui.min && (ui.pt === 'all' || a.pt === ui.pt)) rows.push({ i, name: p.n, th: p.th, ...a });
   }
   const types = PT_ORDER.filter(k => k !== 'UN');
@@ -984,9 +984,10 @@ async function pageSpray() {
   const se = await loadSeason(S.season);
   const f = S.ui.spray || (S.ui.spray = { bat: '', res: '', ht: '', bs: '', th: '', grp: '', minEV: '', color: 'result' });
   const opt = (arr, v) => arr.map(([k, l]) => `<option value="${esc(k)}" ${String(v) === String(k) ? 'selected' : ''}>${esc(l)}</option>`).join('');
-  const batters = [...se.byH.keys()].filter(i => S.players[i].bc && se.byH.get(i).some(r => r.c === 'X' && r.dir != null)).sort((a, b) => pname(a).localeCompare(pname(b)));
+  const qualH = new Set(seasonHitters(se).rows.filter(o => o.q).map(o => o.i));
+  const batters = [...se.byH.keys()].filter(i => qualH.has(i) && se.byH.get(i).some(r => r.c === 'X' && r.dir != null)).sort((a, b) => pname(a).localeCompare(pname(b)));
   app.innerHTML = `
-  <div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · Boston College hitters</span><h1>Spray Chart</h1></div>
+  <div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · Boston College hitters with ${MIN_PA}+ PA</span><h1>Spray Chart</h1></div>
     <div class="controls">${seasonSelect('sp-season', v => { setSeason(v); route(); })}</div></div>
   <form class="panel filters" id="sp-form">
     <label>Batter<select name="bat"><option value="">All BC hitters</option>${opt(batters.map(i => [i, niceName(pname(i))]), f.bat)}</select></label>
@@ -1006,7 +1007,7 @@ async function pageSpray() {
   const run = () => {
     for (const [k, v] of new FormData(form)) f[k] = v;
     const rows = se.rows.filter(r => {
-      if (!isBC(S.players[r.h].t) || r.c !== 'X' || r.ht === 'BU') return false;
+      if (!qualH.has(r.h) || r.c !== 'X' || r.ht === 'BU') return false;
       if (f.bat !== '' && r.h !== +f.bat) return false;
       const hit = ['1B', '2B', '3B', 'HR'].includes(r.r);
       if (f.res === 'hit' && !hit) return false;
@@ -1274,7 +1275,7 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   <section class="grid2">
     <div class="panel"><div class="panel-h"><h2>Zone profile</h2>
       <select id="zm" aria-label="Zone metric">${[['xwoba', 'xwOBA'], ['ba', 'Batting avg'], ['ev', 'Avg exit velo'], ['swing', 'Swing %'], ['whiff', 'Whiff %'], ['pitches', 'Pitches seen']].map(([v, l]) => `<option value="${v}" ${ui.zm === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-      <div class="chart-box" style="max-width:340px" id="zbox">${zoneChart(rows, ui.zm, 'hit')}</div><p class="muted small" style="text-align:center;margin:4px 0 0">Catcher's view · red = better for the hitter</p></div>
+      <div class="chart-box" style="max-width:340px" id="zbox">${zoneChart(rows, ui.zm, 'hit')}</div><p class="muted small" style="text-align:center;margin:4px 0 0">Pitcher's view · red = better for the hitter</p></div>
     <div class="panel"><div class="panel-h"><h2>Exit velo &amp; launch angle</h2><span class="note">Shaded box = 95+ mph at 8°–32°</span></div>${evlaChart(rows)}
       <div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}</div></div>
   </section>
