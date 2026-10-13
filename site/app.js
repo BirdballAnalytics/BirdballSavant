@@ -729,7 +729,7 @@ async function pageHome() {
   app.innerHTML = `
   <section class="hero">
     <div class="hero-l">
-      <span class="eyebrow">Boston College Baseball · TrackMan</span>
+      <span class="eyebrow">Boston College Baseball</span>
       <h1>Birdball<span>Savant</span></h1>
       <div class="controls"><label for="home-season">Season</label>${seasonSelect('home-season', v => { setSeason(v); route(); })}</div>
     </div>
@@ -1445,6 +1445,18 @@ function initTooltips() {
   document.addEventListener('pointerdown', e => { const el = e.target.closest?.('[data-tip]'); if (el) show(el, e.clientX, e.clientY); else tip.hidden = true; });
   window.addEventListener('scroll', () => { tip.hidden = true; }, { passive: true });
 }
+function initTheme() {
+  const btn = $('#theme-btn'); if (!btn) return;
+  const label = () => { btn.textContent = document.documentElement.dataset.theme === 'light' ? 'Dark mode' : 'Light mode'; };
+  label();
+  btn.onclick = () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('bbs:theme', next); } catch { /* storage unavailable */ }
+    label();
+    route();   // redraw charts so their colors follow the new theme
+  };
+}
 function initSearch() {
   const inp = $('#psearch-input'), list = $('#psearch-list');
   let act = -1, items = [];
@@ -1500,6 +1512,7 @@ window.addEventListener('hashchange', () => { const changedPage = location.hash 
   }
   initSearch();
   initTooltips();
+  initTheme();
   lastHash = location.hash;
   route();
 })();
