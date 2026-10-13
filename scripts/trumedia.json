@@ -7,6 +7,8 @@
   ],
   "seasonType": "REG",
   "filter": "(season.seasonLevel IN ('BBC','SFT') AND team.game.gameLeague = 'D1')",
+  "_label_all_teams": "If TruMedia's all-D1 query leaves out teams, the pull asks for each team's roster. true = every D1 team (slower, team shown for everyone); false = Power 4 teams only.",
+  "label_all_teams": true,
   "hitting_columns": [
     "PA",
     "AB",

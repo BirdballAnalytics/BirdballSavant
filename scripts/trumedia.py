@@ -216,6 +216,159 @@ def pick(df, role):
     return None
 
 
+TEAM_NAME_COLS = ["teamName", "newestTeamName", "fullName", "teamFullName", "name", "displayName", "school",
+                  "organization", "abbrevName", "teamAbbrevName", "newestTeamAbbrevName"]
+TEAM_ID_COLS = ["teamId", "newestTeamId", "id", "team_id", "TeamId"]
+CONF_COLS = ["conference", "conferenceName", "conferenceAbbrevName", "teamConference", "newestTeamConference", "conf", "league", "leagueName"]
+
+
+def first_col(df, names):
+    low = {c.lower(): c for c in df.columns}
+    for n in names:
+        if n.lower() in low:
+            return low[n.lower()]
+    return None
+
+
+def clean_id(v):
+    if v is None or (isinstance(v, float) and v != v):
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
+class TeamLabeler:
+    """Gives every pulled player a team (and conference) when TruMedia's all-D1 query
+    leaves them out. Order of preference:
+      1. team name already in the response;
+      2. team ID in the response, looked up in AllTeams;
+      3. one PlayerTotals query per team (Power 4 first) to learn each roster."""
+
+    def __init__(self, tm, year, cfg, p4, report):
+        self.tm, self.year, self.cfg, self.p4, self.rep = tm, year, cfg, p4, report
+        self.teams = None        # teamId -> {"name", "conf"}
+        self.members = None      # playerId or name -> teamId
+
+    def load_teams(self):
+        if self.teams is not None:
+            return self.teams
+        self.teams = {}
+        t = all_teams(self.tm, self.year, self.rep)
+        if t is None or t.empty:
+            return self.teams
+        idc, nc, cc = first_col(t, TEAM_ID_COLS), first_col(t, TEAM_NAME_COLS), first_col(t, CONF_COLS)
+        lg = next((c for c in t.columns if c.lower() in ("gameleague", "teamleague", "level", "teamlevel", "seasonlevel", "division")), None)
+        if lg is not None and t[lg].astype(str).str.upper().eq("D1").any():
+            t = t[t[lg].astype(str).str.upper().eq("D1")]
+        self.rep["all_teams_used_columns"] = {"id": idc, "name": nc, "conference": cc}
+        if idc is None:
+            return self.teams
+        for rec in t.to_dict("records"):
+            tid = clean_id(rec.get(idc))
+            if tid:
+                self.teams[tid] = {"name": str(rec.get(nc, "") or "") if nc else "",
+                                   "conf": str(rec.get(cc, "") or "") if cc else ""}
+        return self.teams
+
+    def is_p4(self, info):
+        conf = norm(info.get("conf", ""))
+        if conf and any(conf == norm(c) or conf.startswith(norm(c) + " ") for c in self.cfg.get("power4", {})):
+            return True
+        return match_p4(info.get("name", ""), self.p4) is not None
+
+    def load_members(self, key_col_name):
+        if self.members is not None:
+            return self.members
+        self.members = {}
+        teams = self.load_teams()
+        if not teams:
+            return self.members
+        order = sorted(teams, key=lambda t: not self.is_p4(teams[t]))
+        if not self.cfg.get("label_all_teams", True):
+            order = [t for t in order if self.is_p4(teams[t])]
+        base = {"seasonYear": self.year, "seasonType": self.cfg.get("seasonType", "REG"), "format": "RAW"}
+        done = failed = 0
+        log(f"    learning rosters for {len(order)} teams (Power 4 first)")
+        for tid in order:
+            df = None
+            for cols in (["PA", "IP"], ["PA"], ["IP"]):
+                try:
+                    df = self.tm.query("PlayerTotals", {**base, "teamId": tid}, cols)
+                    break
+                except QueryError:
+                    continue
+            if df is None:
+                failed += 1
+                if failed >= 15 and done == 0:
+                    log("    ! per-team queries are failing; stopping roster lookups")
+                    break
+                continue
+            done += 1
+            kc = first_col(df, [key_col_name]) or pick(df, "id") or pick(df, "name")
+            if kc is None:
+                continue
+            for v in df[kc].tolist():
+                k = clean_id(v)
+                if k and k not in self.members:
+                    self.members[k] = tid
+        self.rep["roster_queries"] = {"teams": len(order), "ok": done, "failed": failed, "players": len(self.members)}
+        log(f"    rosters: {done} teams answered, {failed} failed, {len(self.members)} players placed")
+        return self.members
+
+    def label(self, df: pd.DataFrame, srep: dict) -> pd.DataFrame:
+        tcol, idcol = pick(df, "team"), pick(df, "teamId")
+        if tcol and df[tcol].astype(str).str.strip().replace("nan", "").ne("").mean() > 0.8:
+            srep["team_source"] = "TruMedia response"
+            return df
+        teams = self.load_teams()
+        df = df.copy()
+        if idcol and df[idcol].notna().mean() > 0.8 and teams:
+            tids = df[idcol].map(clean_id)
+            srep["team_source"] = "team ID looked up in AllTeams"
+        else:
+            key = pick(df, "id") or pick(df, "name")
+            members = self.load_members(key)
+            tids = df[key].map(clean_id).map(members) if key else pd.Series([None] * len(df))
+            srep["team_source"] = "per-team roster queries"
+        df["__teamId"] = tids
+        df["__team"] = tids.map(lambda t: teams.get(t, {}).get("name", "") if t else "")
+        df["__conf"] = tids.map(lambda t: teams.get(t, {}).get("conf", "") if t else "")
+        srep["players_with_team"] = int(df["__team"].astype(str).ne("").sum())
+        return df
+
+
+# Words that, right after a Power 4 school name, mean it's a different school (Texas State, Miami (OH)...)
+NOT_SAME_SCHOOL = {"state", "st", "southern", "tech", "christian", "atlantic", "international", "baptist", "poly",
+                   "city", "valley", "commonwealth", "chicago", "omaha", "arlington", "martin", "northern", "eastern",
+                   "western", "central", "a", "oh", "ohio", "gulf", "pine", "fort", "san", "rio", "corpus", "upstate",
+                   "wesleyan", "lutheran", "pacific", "coastal", "gwinnett", "southwestern"}
+TWO_WORD_MASCOTS = {"tar heels", "blue devils", "demon deacons", "golden bears", "yellow jackets", "fighting irish",
+                    "crimson tide", "sun devils", "red raiders", "horned frogs", "golden gophers", "fighting illini",
+                    "scarlet knights", "nittany lions", "golden eagles", "black knights"}
+
+
+def match_p4(name, p4):
+    """Power 4 match for a team name, allowing a trailing mascot ('Miami (FL) Hurricanes')."""
+    n = norm(name)
+    if not n:
+        return None
+    if n in p4:
+        return p4[n]
+    best = None
+    for k, v in p4.items():
+        if n.startswith(k + " ") and (best is None or len(k) > len(best[0])):
+            best = (k, v)
+    if not best:
+        return None
+    rest = n[len(best[0]):].split()
+    if rest and rest[0] in NOT_SAME_SCHOOL:
+        return None
+    if len(rest) == 1 or (len(rest) == 2 and " ".join(rest) in TWO_WORD_MASCOTS):
+        return best[1]
+    return None
+
+
 def p4_lookup(cfg):
     names = {}
     for conf, teams in cfg.get("power4", {}).items():
@@ -241,15 +394,22 @@ def tidy(df: pd.DataFrame, cfg: dict, side: str, p4: dict, report: dict):
     rows = []
     confs_found = {}
     for rec in df.to_dict("records"):
-        team = str(rec.get(ids["team"], "") or "") if ids["team"] else ""
-        conf_raw = str(rec.get(ids["conf"], "") or "") if ids["conf"] else ""
+        team = str(rec.get("__team") or (rec.get(ids["team"], "") if ids["team"] else "") or "")
+        conf_raw = str(rec.get("__conf") or (rec.get(ids["conf"], "") if ids["conf"] else "") or "")
+        if team == "nan":
+            team = ""
+        if conf_raw == "nan":
+            conf_raw = ""
         conf, canon = None, None
         if conf_raw:
             cr = norm(conf_raw)
+            aliases = {"ACC": ["atlantic coast", "atlantic coast conference", "acc"], "SEC": ["southeastern", "southeastern conference", "sec"],
+                       "Big Ten": ["big ten", "big 10", "b1g", "big ten conference"], "Big 12": ["big 12", "big twelve", "big 12 conference"]}
             for c in cfg.get("power4", {}):
-                if cr == norm(c) or cr.startswith(norm(c) + " "):
+                names = [norm(c)] + [norm(a) for a in aliases.get(c, [])]
+                if any(cr == n or cr.startswith(n + " ") for n in names):
                     conf = c
-        hit = p4.get(norm(team))
+        hit = match_p4(team, p4)
         if hit:
             conf = conf or hit[0]
             canon = hit[1]
@@ -270,7 +430,7 @@ def tidy(df: pd.DataFrame, cfg: dict, side: str, p4: dict, report: dict):
             str(rec.get(ids["id"], "")) if ids["id"] else "",
             str(rec.get(ids["name"], "")),
             team,
-            str(rec.get(ids["teamId"], "")) if ids["teamId"] else "",
+            clean_id(rec.get("__teamId")) or (clean_id(rec.get(ids["teamId"])) if ids["teamId"] else ""),
             conf_raw or (conf or ""),
             1 if conf else 0,
             str(rec.get(ids["pos"], "") or "") if ids["pos"] else "",
@@ -312,6 +472,7 @@ def main():
     for year in cfg.get("seasons", []):
         yr = report["years"].setdefault(str(year), {})
         strats, chosen = strategies(tm, year, cfg, yr, p4), {}
+        labeler = TeamLabeler(tm, year, cfg, p4, yr)
         out = {"year": year, "pulled": report["ran"], "qualify": cfg.get("qualify", {}),
                "percentile_map": cfg.get("percentile_map", {})}
         try:
@@ -322,6 +483,9 @@ def main():
                 if df is None or df.empty:
                     srep["rows"] = 0
                     continue
+                df = labeler.label(df, srep)
+                log(f"    teams from: {srep.get('team_source')}"
+                    + (f" ({srep.get('players_with_team')} of {len(df)} players placed)" if 'players_with_team' in srep else ""))
                 out[side] = tidy(df, cfg, side, p4, srep)
                 srep["rows"] = len(out[side]["rows"])
                 srep["power4_rows"] = sum(r[5] for r in out[side]["rows"])
