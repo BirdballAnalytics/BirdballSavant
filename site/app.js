@@ -11,6 +11,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const S = { meta: null, players: [], pidx: new Map(), seasons: {}, season: null, sort: {}, ui: {} };
 
 /* ---------- constants ---------- */
+const MIN_PA = 5;   // hitters: plate appearances; pitchers: batters faced
 const PT = {
   FF: { n: 'Four-Seam', c: '#d22d49' }, SI: { n: 'Sinker', c: '#ef8b00' }, FC: { n: 'Cutter', c: '#933f2c' },
   SL: { n: 'Slider', c: '#c4b000' }, ST: { n: 'Sweeper', c: '#b07d1c' }, CU: { n: 'Curveball', c: '#00a6c2' },
@@ -131,7 +132,7 @@ function stats(rows) {
     else if (r.iz === false) { t.ozn++; t.locN++; if (r.sw) { t.osw++; if (!r.wh) t.ocon++; } }
     if (r.ppa === 1) { t.fpN++; if (r.sw) t.fps++; if (r.c === 'C' || r.c === 'S' || r.c === 'F' || r.c === 'X') t.fpk++; }
     if (r.c === 'C' || r.c === 'S') t.csw++;
-    if (r.bat != null && r.bat >= 50 && r.sw) {
+    if (r.bat != null && r.bat >= 50 && r.bat <= 95 && r.sw) {
       t.bats.push(r.bat);
       if (r.bat >= 75) t.fast++;
       if (r.vat != null) { t.vats.push(r.vat); if (r.vat >= 5 && r.vat <= 20) t.ideal++; }
@@ -244,8 +245,7 @@ function seasonHitters(se) {
     const st = stats(rows); if (!st.PA) continue;
     out.push({ i, name: p.n, ...st, bats: p.b });
   }
-  const max = Math.max(0, ...out.map(o => o.PA));
-  const q = Math.max(10, Math.round(max * 0.3));
+  const q = MIN_PA;   // qualifying minimum for rate stats, leaderboards and percentiles
   out.forEach(o => o.q = o.PA >= q);
   return (se.cache.hit = { rows: out, q });
 }
@@ -257,8 +257,7 @@ function seasonPitchers(se) {
     const st = stats(rows);
     out.push({ i, name: p.n, ...st, ...pitchShape(rows), throws: p.th });
   }
-  const max = Math.max(0, ...out.map(o => o.PA));
-  const q = Math.max(10, Math.round(max * 0.3));
+  const q = MIN_PA;   // qualifying minimum for rate stats, leaderboards and percentiles
   out.forEach(o => o.q = o.PA >= q);
   return (se.cache.pit = { rows: out, q });
 }
@@ -363,13 +362,13 @@ const C = {
   chase: { k: 'chase', label: 'Chase%', fmt: F.pct, tip: 'Swings at pitches outside the zone' }, whiff: { k: 'whiff', label: 'Whiff%', fmt: F.pct, tip: 'Misses per swing' },
   zcontact: { k: 'zcontact', label: 'Z-Contact%', fmt: F.pct }, contact: { k: 'contact', label: 'Contact%', fmt: F.pct },
   fpSwing: { k: 'fpSwing', label: '1st-Pitch Swing%', fmt: F.pct }, fpStrike: { k: 'fpStrike', label: 'F-Strike%', fmt: F.pct }, csw: { k: 'csw', label: 'CSW%', fmt: F.pct, tip: 'Called strikes + whiffs per pitch' },
-  batSpd: { k: 'batSpd', label: 'Bat Speed', fmt: F.f1, tip: 'Average of swings 50+ mph where tracked' }, maxBat: { k: 'maxBat', label: 'Max Bat Spd', fmt: F.f1 },
+  batSpd: { k: 'batSpd', label: 'Bat Speed', fmt: F.f1, tip: 'Average of tracked swings between 50 and 95 mph' }, maxBat: { k: 'maxBat', label: 'Max Bat Spd', fmt: F.f1 },
   ip: { k: 'outs', label: 'IP', fmt: F.ip, tip: 'From TrackMan outs; approximate' }, runs: { k: 'runs', label: 'R', fmt: F.int, tip: 'Runs scored on plays (not earned runs)' },
   fbVelo: { k: 'fbVelo', label: 'FB Velo', fmt: F.f1, tip: 'Average four-seam + sinker velocity' }, fbMax: { k: 'fbMax', label: 'FB Max', fmt: F.f1 },
   fbSpin: { k: 'fbSpin', label: 'FB Spin', fmt: F.int }, fbIVB: { k: 'fbIVB', label: 'FB IVB', fmt: F.f1 }, ext: { k: 'ext', label: 'Ext.', fmt: F.f1 },
   maxDist: { k: 'maxDist', label: 'Max Dist', fmt: F.int },
   k2win: { k: 'k2win', label: '2K Win%', fmt: F.pct, tip: 'Plate appearances that reached two strikes and did not end in a strikeout' },
-  swingsTracked: { k: 'swingsTracked', label: 'Swings', fmt: F.int, tip: 'Swings with bat tracking (50+ mph)' },
+  swingsTracked: { k: 'swingsTracked', label: 'Swings', fmt: F.int, tip: 'Swings with bat tracking (50–95 mph)' },
   batTop: { k: 'batTop', label: 'Top-10% Bat Spd', fmt: F.f1, tip: 'Average of the fastest 10% of tracked swings' },
   fastPct: { k: 'fastPct', label: 'Fast-Swing%', fmt: F.pct, tip: 'Share of tracked swings at 75+ mph' },
   attackAngle: { k: 'attackAngle', label: 'Attack Angle', fmt: F.f1, tip: 'Average vertical attack angle at contact (°)' },
@@ -640,7 +639,7 @@ function scatterFrame(W, H, m, xs, ys, xTitle, yTitle, xFmt, yFmt) {
   g += `<text x="12" y="${(m.t + H - m.b) / 2}" text-anchor="middle" class="ttl" transform="rotate(-90 12 ${(m.t + H - m.b) / 2})">${yTitle}</text>`;
   return g;
 }
-function scale(lo, hi, a, b, n) { const ticks = niceTicks(lo, hi, n); const L = Math.min(lo, ticks[0]), Hh = Math.max(hi, ticks[ticks.length - 1]); return { ticks, f: v => a + (v - L) / (Hh - L || 1) * (b - a) }; }
+function scale(lo, hi, a, b, n) { const ticks = niceTicks(lo, hi, n); const L = Math.min(lo, ticks[0]), Hh = Math.max(hi, ticks[ticks.length - 1]); return { ticks, lo: L, hi: Hh, f: v => a + (v - L) / (Hh - L || 1) * (b - a) }; }
 
 function batCharts(se, data) {
   const MIN_SW = 10;
@@ -688,7 +687,7 @@ function batCharts(se, data) {
 
   // 3. Bat speed distribution by hitter
   const rowsP = [...pl].sort((a, b) => b.batSpd - a.batSpd);
-  const swings = new Map(rowsP.map(o => [o.i, (se.byH.get(o.i) || []).filter(r => r.bat != null && r.bat >= 50 && r.sw).map(r => r.bat)]));
+  const swings = new Map(rowsP.map(o => [o.i, (se.byH.get(o.i) || []).filter(r => r.bat != null && r.bat >= 50 && r.bat <= 95 && r.sw).map(r => r.bat)]));
   const allSw = [...swings.values()].flat();
   const W = 1100, rowH = 26, m = { l: 150, r: 24, t: 10, b: 36 }, H = m.t + rowsP.length * rowH + m.b;
   const xs = scale(Math.floor(Math.min(...allSw)), Math.ceil(Math.max(...allSw)), m.l, W - m.r, 8);
@@ -705,10 +704,87 @@ function batCharts(se, data) {
     g += `<rect x="${(xs.f(o.batTop) - 1.5).toFixed(1)}" y="${cy - 9}" width="3" height="18" rx="1.5" class="topmark" data-tip="${esc(`<b>${esc(niceName(o.name))}</b><br>Top-10% bat speed ${F.f1(o.batTop)} mph`)}"/>`;
     g += `<rect x="${(xs.f(o.batSpd) - 6).toFixed(1)}" y="${cy - 6}" width="12" height="12" rx="2" transform="rotate(45 ${xs.f(o.batSpd).toFixed(1)} ${cy})" class="avgmark" data-tip="${esc(`<b>${esc(niceName(o.name))}</b><br>Average ${F.f1(o.batSpd)} mph · max ${F.f1(o.maxBat)}<br>Fast-swing ${F.pct(o.fastPct)}% · ${o.swingsTracked} swings`)}"/>`;
   });
-  const c3 = `<div class="panel"><div class="panel-h"><h2>Bat speed by hitter</h2><span class="note">Each dot is one tracked swing (50+ mph)</span></div>
+  const c3 = `<div class="panel"><div class="panel-h"><h2>Bat speed by hitter</h2><span class="note">Each dot is one tracked swing (50–95 mph)</span></div>
     <div style="overflow-x:auto">${svg(W, H, g, 'Bat speed distribution by hitter').replace('class="chart"', 'class="chart" style="min-width:640px"')}</div>
     <div class="legend"><span><i class="lg-swing"></i>Swing</span><span><i class="lg-avg"></i>Average</span><span><i class="lg-top"></i>Top-10% average</span></div></div>`;
   return `<section class="grid2">${c1}${c2}</section>${c3}<p class="muted small" style="margin:0">Charts include hitters with ${MIN_SW}+ tracked swings who meet the Min PA filter above.</p>`;
+}
+
+/* ---------- bat tracking: single hitter ---------- */
+function playerBatCharts(i, se) {
+  const MIN = 10;
+  const sw = (se.byH.get(i) || []).filter(r => r.bat != null && r.bat >= 50 && r.bat <= 95 && r.sw);
+  if (sw.length < MIN) return '';
+  const me = stats(se.byH.get(i) || []);
+  const team = stats(se.rows.filter(r => isBC(S.players[r.h]?.t)));
+  const nm = esc(niceName(pname(i)));
+
+  // 1. Bat speed distribution (2 mph bins)
+  const lo = 50, hi = 95, bw = 2.5, nb = Math.ceil((hi - lo) / bw);
+  const bins = Array(nb).fill(0); sw.forEach(r => bins[Math.min(nb - 1, Math.floor((r.bat - lo) / bw))]++);
+  const first = bins.findIndex(v => v > 0), last = nb - 1 - [...bins].reverse().findIndex(v => v > 0);
+  const b0 = Math.max(0, Math.min(first, Math.floor((team.batSpd - lo) / bw)) - 1), b1 = Math.min(nb - 1, Math.max(last, Math.floor((team.batSpd - lo) / bw)) + 1);
+  {
+    var W1 = 420, H1 = 340, m = { l: 36, r: 12, t: 26, b: 40 };
+    const xA = lo + b0 * bw, xB = lo + (b1 + 1) * bw;
+    const X = v => m.l + (v - xA) / (xB - xA) * (W1 - m.l - m.r);
+    const ymax = Math.max(...bins), yt = niceTicks(0, ymax, 4), ytop = Math.max(ymax, yt[yt.length - 1]);
+    const Y = v => H1 - m.b - v / ytop * (H1 - m.t - m.b);
+    var g1 = '';
+    for (const v of yt) g1 += `<line class="grid" x1="${m.l}" x2="${W1 - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+    for (let k = b0; k <= b1 + 1; k++) { const v = lo + k * bw; if (Number.isInteger(v) && v % 5 === 0) g1 += `<text x="${X(v)}" y="${H1 - m.b + 15}" text-anchor="middle">${v}</text>`; }
+    for (let k = b0; k <= b1; k++) {
+      if (!bins[k]) continue;
+      const x0 = X(lo + k * bw) + 1, x1 = X(lo + (k + 1) * bw) - 1, y = Y(bins[k]), yb = Y(0), r = Math.min(4, (x1 - x0) / 2, yb - y);
+      const fast = lo + k * bw >= 75;
+      g1 += `<path class="${fast ? 'bar fast' : 'bar'}" d="M${x0},${yb} V${y + r} Q${x0},${y} ${x0 + r},${y} H${x1 - r} Q${x1},${y} ${x1},${y + r} V${yb} Z" data-tip="${esc(`<b>${(lo + k * bw).toFixed(1)}–${(lo + (k + 1) * bw).toFixed(1)} mph</b><br>${bins[k]} swing${bins[k] === 1 ? '' : 's'}`)}"/>`;
+    }
+    g1 += `<line class="avgline" x1="${X(team.batSpd)}" x2="${X(team.batSpd)}" y1="${m.t - 8}" y2="${H1 - m.b}"/><text x="${X(team.batSpd) + (me.batSpd >= team.batSpd ? -5 : 5)}" y="${m.t - 2}" text-anchor="${me.batSpd >= team.batSpd ? 'end' : 'start'}" class="qlab">BC ${F.f1(team.batSpd)}</text>`;
+    g1 += `<line class="meline" x1="${X(me.batSpd)}" x2="${X(me.batSpd)}" y1="${m.t}" y2="${H1 - m.b}"/>`;
+    g1 += `<rect x="${(X(me.batSpd) - 6).toFixed(1)}" y="${m.t - 6}" width="12" height="12" rx="2" transform="rotate(45 ${X(me.batSpd).toFixed(1)} ${m.t})" class="avgmark" data-tip="${esc(`<b>${nm}</b><br>Average ${F.f1(me.batSpd)} mph<br>Top-10% ${F.f1(me.batTop)} · max ${F.f1(me.maxBat)}`)}"/>`;
+    g1 += `<text x="${(m.l + W1 - m.r) / 2}" y="${H1 - 4}" text-anchor="middle" class="ttl">Bat speed (mph)</text>`;
+  }
+  const c1 = `<div class="panel"><div class="panel-h"><h2>Bat speed</h2><span class="note">${sw.length} tracked swings · ${esc(se.label)}</span></div>${svg(W1, H1, g1, 'Bat speed distribution')}
+    <div class="legend"><span><i class="lg-bar"></i>Swings</span><span><i class="lg-bar fast"></i>75+ mph (fast swing)</span><span><i class="lg-avg"></i>${nm} average</span><span><i class="lg-dash"></i>BC average</span></div></div>`;
+
+  // 2. Swing path, one dot per swing
+  const pts = sw.filter(r => r.vat != null && r.hat != null && r.bs).map(r => ({ r, x: r.bs === 'L' ? r.hat : -r.hat, y: r.vat }));
+  let c2 = '';
+  if (pts.length >= MIN) {
+    const W = 420, H = 340, m = { l: 44, r: 12, t: 18, b: 40 };
+    const xr = Math.min(60, Math.max(20, ...pts.map(p => Math.abs(p.x)))) + 2;
+    const ys = scale(Math.max(-30, Math.min(-5, ...pts.map(p => p.y))) - 2, Math.min(50, Math.max(30, ...pts.map(p => p.y))) + 2, H - m.b, m.t, 6);
+    const xs = scale(-xr, xr, m.l, W - m.r, 6);
+    const clampX = v => Math.max(-xr, Math.min(xr, v)), clampY = v => Math.max(ys.ticks[0], Math.min(ys.ticks[ys.ticks.length - 1], v));
+    let g = `<rect x="${m.l}" y="${ys.f(20)}" width="${W - m.r - m.l}" height="${ys.f(5) - ys.f(20)}" class="band"/><text x="${m.l + 6}" y="${ys.f(5) - 6}" class="qlab">Ideal attack angle 5°–20°</text>`;
+    g += scatterFrame(W, H, m, xs, ys, '← Oppo · Attack direction (°) · Pull →', 'Attack angle (°)', v => Math.abs(v), v => v + '°');
+    g += `<line class="avgline" x1="${xs.f(0)}" x2="${xs.f(0)}" y1="${m.t}" y2="${H - m.b}"/>`;
+    g += pts.map(p => `<circle cx="${xs.f(clampX(p.x)).toFixed(1)}" cy="${ys.f(clampY(p.y)).toFixed(1)}" r="4" class="${p.r.c === 'X' ? 'sdot inplay' : 'sdot'}" data-tip="${esc(`${esc(fmtDate(p.r.d))} · ${esc(PT[p.r.pt]?.n || '')}<br>Bat ${F.f1(p.r.bat)} mph · AA ${F.f1(p.y)}°<br>${Math.abs(p.x).toFixed(1)}° ${p.x >= 0 ? 'pull' : 'oppo'} · ${esc(p.r.r ? RES_NAME[p.r.r] : CALL_NAME[p.r.c])}`)}"/>`).join('');
+    g += `<rect x="${(xs.f(me.attackDir) - 7).toFixed(1)}" y="${(ys.f(me.attackAngle) - 7).toFixed(1)}" width="14" height="14" rx="2" transform="rotate(45 ${xs.f(me.attackDir).toFixed(1)} ${ys.f(me.attackAngle).toFixed(1)})" class="avgmark" data-tip="${esc(`<b>${nm} average</b><br>Attack angle ${F.f1(me.attackAngle)}° · ideal ${F.pct(me.idealAA)}%<br>${Math.abs(me.attackDir).toFixed(1)}° ${me.attackDir >= 0 ? 'pull' : 'oppo'}`)}"/>`;
+    c2 = `<div class="panel"><div class="panel-h"><h2>Swing path</h2><span class="note">One dot per tracked swing</span></div>${svg(W, H, g, 'Swing path')}
+      <div class="legend"><span><i class="lg-in"></i>Ball in play</span><span><i class="lg-out"></i>Foul or miss</span><span><i class="lg-avg"></i>Average</span></div></div>`;
+  }
+
+  // 3. Bat speed vs squared-up %, one dot per tracked contact
+  const con = sw.filter(r => r.c === 'X' && r.ev != null && r.v != null && r.ht !== 'BU').map(r => ({ r, x: r.bat, y: r.ev / (1.23 * r.bat + 0.23 * r.v) }));
+  let c3 = '';
+  if (con.length >= 5) {
+    const W = 420, H = 340, m = { l: 44, r: 12, t: 18, b: 40 };
+    const xs = scale(Math.min(...con.map(p => p.x)) - 1, Math.max(...con.map(p => p.x)) + 1, m.l, W - m.r, 6);
+    const yLo = Math.max(0, Math.min(0.6, Math.floor(Math.min(...con.map(p => p.y)) * 10) / 10));
+    const ys = scale(yLo, 1.1, H - m.b, m.t, 5);
+    const cl = v => Math.max(ys.lo, Math.min(ys.hi, v));
+    // blast region: squared-up% x 100 + bat speed >= 164  ->  y >= (164 - x) / 100
+    const xA = xs.lo, xB = xs.hi;
+    let g = `<path class="blast" d="M${xs.f(xA)},${ys.f(cl((164 - xA) / 100))} L${xs.f(xB)},${ys.f(cl((164 - xB) / 100))} L${xs.f(xB)},${ys.f(ys.hi)} L${xs.f(xA)},${ys.f(ys.hi)} Z"/>`;
+    g += scatterFrame(W, H, m, xs, ys, 'Bat speed (mph)', 'Squared-up %', v => v, v => Math.round(v * 100) + '%');
+    g += `<line class="avgline" x1="${m.l}" x2="${W - m.r}" y1="${ys.f(0.8)}" y2="${ys.f(0.8)}"/><text x="${W - m.r - 4}" y="${ys.f(0.8) + 14}" text-anchor="end" class="qlab">Squared up (80%)</text>`;
+    g += `<text x="${W - m.r - 4}" y="${ys.f(ys.hi) + 14}" text-anchor="end" class="qlab">Blast zone</text>`;
+    g += con.sort((a, b) => (resGroup(b.r.r) === 'OUT') - (resGroup(a.r.r) === 'OUT')).map(p => { const rg = resGroup(p.r.r); return `<circle cx="${xs.f(p.x).toFixed(1)}" cy="${ys.f(cl(p.y)).toFixed(1)}" r="${rg === 'OUT' ? 4 : 5}" fill="${RES_COLOR[rg]}" fill-opacity="${rg === 'OUT' ? .55 : .9}" class="cdot" data-tip="${esc(`${esc(fmtDate(p.r.d))} · ${esc(RES_NAME[p.r.r] || p.r.r)}<br>Bat ${F.f1(p.x)} mph · squared-up ${Math.round(p.y * 100)}%<br>${F.f1(p.r.ev)} mph EV at ${F.f1(p.r.la)}°`)}"/>`; }).join('');
+    c3 = `<div class="panel"><div class="panel-h"><h2>Bat speed &amp; squared-up</h2><span class="note">One dot per tracked ball in play · squared-up ${F.pct(me.sqPct)}% · blast ${F.pct(me.blastPct)}%</span></div>${svg(W, H, g, 'Bat speed versus squared-up rate per contact')}
+      <div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}</div></div>`;
+  }
+  return `<section class="grid3 batgrid">${c1}${c2}${c3}</section>`;
 }
 
 /* ---------- pages ---------- */
@@ -1193,6 +1269,7 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Batted ball &amp; expected stats</h2></div>${table('t-ph-sc', [sCol, ...HIT_VIEWS.statcast[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   ${all.swingsTracked ? `<section><div class="panel-h"><h2>Bat tracking</h2><span class="note">Only games with bat tracking turned on</span></div>${table('t-ph-bat', [sCol, ...HIT_VIEWS.bat[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>` : ''}
+  ${playerBatCharts(i, se)}
   <section><div class="panel-h"><h2>Plate discipline</h2></div>${table('t-ph-pd', [sCol, ...HIT_VIEWS.discipline[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section class="grid2">
     <div class="panel"><div class="panel-h"><h2>Zone profile</h2>
@@ -1378,8 +1455,8 @@ function pageGlossary() {
     ['Hard-Hit %', 'Share of tracked batted balls hit 95 mph or harder. Bunts are excluded from all batted-ball quality stats.'],
     ['Sweet-Spot %', 'Share of tracked batted balls with a launch angle between 8° and 32°.'],
     ['EV90', 'The 90th-percentile exit velocity, a steadier measure of top-end power than max EV.'],
-    ['Bat Speed', 'Average TrackMan bat speed on swings of 50+ mph (to leave out checked swings and bunts). Only available in games where bat tracking was on.'],
-    ['Bat tracking', 'TrackMan bat speed and attack angles, recorded only in games where bat tracking was on, and only for swings of 50+ mph. Fast-Swing% is the share of those swings at 75+ mph. Attack Angle is the bat\'s vertical angle at contact; Ideal AA% is the share between 5° and 20°. Attack Direction is the bat\'s horizontal angle, shown toward the pull or opposite field.'],
+    ['Bat Speed', 'Average TrackMan bat speed on swings between 50 and 95 mph (readings outside that range are checked swings, bunts or tracking errors and are removed). Only available in games where bat tracking was on.'],
+    ['Bat tracking', 'TrackMan bat speed and attack angles, recorded only in games where bat tracking was on, and only for swings between 50 and 95 mph. Fast-Swing% is the share of those swings at 75+ mph. Attack Angle is the bat\'s vertical angle at contact; Ideal AA% is the share between 5° and 20°. Attack Direction is the bat\'s horizontal angle, shown toward the pull or opposite field.'],
     ['Squared-Up % / Blast %', 'Per tracked contact. A ball is squared up when its exit velocity reaches 80% of the most the swing could produce (1.23 × bat speed + 0.23 × pitch speed, the MLB Statcast formula). A blast is contact where squared-up % × 100 + bat speed is at least 164. Swing length is not recorded by TrackMan, so it is not shown.'],
     ['Zone', `The strike zone used for Zone%, Chase% and zone charts is ±${ZW} ft from the center of the plate (plate plus a ball's width) and ${ZB}–${ZT} ft high.`],
     ['Chase %', 'Swings at pitches outside the zone ÷ pitches outside the zone.'],
@@ -1388,7 +1465,7 @@ function pageGlossary() {
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement and release charts are drawn from the pitcher\'s point of view; location and zone charts from the catcher\'s.'],
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
-    ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify at 30% of the team-leading plate appearances (at least 10); pitchers at 30% of the team-leading batters faced. Non-qualified players are shown faded against the same pool.'],
+    ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify with 5 or more plate appearances and pitchers with 5 or more batters faced. Non-qualified players are shown faded against the same pool.'],
     ['IP and R', 'Innings pitched and runs come from TrackMan outs-on-play and runs-scored tagging. They are close to the official box score but are not official, and runs are not split into earned and unearned.'],
     ['Results-only games', 'Games uploaded as plate-appearance results instead of TrackMan. They count toward PA, AB, hits, AVG, OBP, SLG, wOBA, K%, BB% and batted-ball type (from the scorebook notation), and are left out of everything that needs tracking: pitch counts, exit velocity, xBA/xSLG/xwOBA, swing and chase rates.'],
     ['2K Win %', 'Share of plate appearances that reached two strikes and did not end in a strikeout (a hit, walk, HBP or ball in play all count as wins). Uses TrackMan and results-only games.'],

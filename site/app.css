@@ -259,3 +259,19 @@ dl.gloss dd { margin: 0; color: var(--muted); }
 .foot-r { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
 .linkbtn { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
 .linkbtn:hover { text-decoration: underline; }
+
+.chart .bar { fill: var(--link); fill-opacity: .55; cursor: pointer; }
+.chart .bar.fast { fill-opacity: .95; }
+.chart .bar:hover { fill-opacity: 1; }
+.chart .meline { stroke: var(--ink); stroke-width: 2; }
+.chart .sdot { fill: none; stroke: var(--link); stroke-width: 1.5; stroke-opacity: .7; cursor: pointer; }
+.chart .sdot.inplay { fill: var(--link); fill-opacity: .7; stroke: var(--surface); stroke-width: 1; }
+.chart .cdot { stroke: var(--surface); stroke-width: 1.5; cursor: pointer; }
+.chart .blast { fill: var(--good); opacity: .1; }
+.legend .lg-bar { background: var(--link); opacity: .55; border-radius: 2px; }
+.legend .lg-bar.fast { opacity: .95; }
+.legend .lg-dash { width: 14px; height: 0; border-top: 2px dashed var(--muted); border-radius: 0; vertical-align: 3px; }
+.legend .lg-in { background: var(--link); opacity: .8; }
+.legend .lg-out { background: transparent; border: 1.5px solid var(--link); }
+.batgrid .panel { display: flex; flex-direction: column; }
+.batgrid .panel .chart { margin-top: auto; }
