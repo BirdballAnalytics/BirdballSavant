@@ -461,7 +461,7 @@ function zoneChart(rows, metric, side) {
   const W = 300, H = 330, x0 = 150, sx = 72, zy = v => 300 - (v - 0.6) * 72;
   const X = v => x0 + v * sx;
   const zs = {};
-  // mirrored left/right (pitcher's view)
+  // mirrored left/right = catcher's view
   for (const r of rows) { const z = r.px == null ? null : zone13(-r.px, r.pz); if (z == null) continue; (zs[z] = zs[z] || []).push(r); }
   const val = list => {
     if (!list || !list.length) return null;
@@ -502,18 +502,23 @@ function zoneChart(rows, metric, side) {
   return svg(W, H, g, 'Strike zone chart, catcher\'s view');
 }
 
-function locationChart(rows, active) {
-  const W = 300, H = 330, X = v => 150 + v * 60, Y = v => 310 - v * 60;
-  let g = `<rect class="zone" x="${X(-ZW)}" y="${Y(ZT)}" width="${X(ZW) - X(-ZW)}" height="${Y(ZB) - Y(ZT)}"/>`;
+// TrackMan PlateLocSide is positive toward the third-base side, so plotting it as-is gives the
+// pitcher's view. catcher = true mirrors it.
+function locationChart(rows, active, catcher = false) {
+  const W = 300, H = 330, sgn = catcher ? -1 : 1, X = v => 150 + sgn * v * 60, Y = v => 310 - v * 60;
+  let g = `<rect class="zone" x="${Math.min(X(-ZW), X(ZW))}" y="${Y(ZT)}" width="${Math.abs(X(ZW) - X(-ZW))}" height="${Y(ZB) - Y(ZT)}"/>`;
   for (let i = 1; i < 3; i++) {
     g += `<line class="grid" x1="${X(-ZW + i * 2 * ZW / 3)}" x2="${X(-ZW + i * 2 * ZW / 3)}" y1="${Y(ZT)}" y2="${Y(ZB)}"/>`;
     g += `<line class="grid" y1="${Y(ZB + i * (ZT - ZB) / 3)}" y2="${Y(ZB + i * (ZT - ZB) / 3)}" x1="${X(-ZW)}" x2="${X(ZW)}"/>`;
   }
-  // home plate: flat edge at the bottom, point facing up
-  g += `<path class="plate" d="M${X(-0.71)},${Y(0.25) + 12} h${1.42 * 60} v-6 l-${1.42 * 60 / 2},-6 l-${1.42 * 60 / 2},6 Z"/>`;
+  // home plate: pitcher's view = point away from the viewer (up); catcher's view = point toward the viewer (down)
+  const pl = 150 - 0.71 * 60, pw = 1.42 * 60, py = Y(0.25);
+  g += catcher
+    ? `<path class="plate" d="M${pl},${py} h${pw} v6 l-${pw / 2},6 l-${pw / 2},-6 Z"/>`
+    : `<path class="plate" d="M${pl},${py + 12} h${pw} v-6 l-${pw / 2},-6 l-${pw / 2},6 Z"/>`;
   const pts = rows.filter(r => r.px != null && r.pz != null && active.has(r.pt));
   g += pts.map(r => `<circle cx="${X(Math.max(-2.4, Math.min(2.4, r.px))).toFixed(1)}" cy="${Y(Math.max(-0.2, Math.min(5.2, r.pz))).toFixed(1)}" r="3" fill="${PT[r.pt].c}" fill-opacity=".55"><title>${PT[r.pt].n} ${F.f1(r.v)} mph · ${esc(CALL_NAME[r.c])}${r.r ? ' · ' + esc(RES_NAME[r.r]) : ''}</title></circle>`).join('');
-  return svg(W, H, g, 'Pitch locations, catcher\'s view');
+  return svg(W, H, g, catcher ? 'Pitch locations, catcher\'s view' : 'Pitch locations, pitcher\'s view');
 }
 
 function movementChart(rows, active) {
@@ -1278,7 +1283,7 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   <section class="grid2">
     <div class="panel"><div class="panel-h"><h2>Zone profile</h2>
       <select id="zm" aria-label="Zone metric">${[['xwoba', 'xwOBA'], ['ba', 'Batting avg'], ['ev', 'Avg exit velo'], ['swing', 'Swing %'], ['whiff', 'Whiff %'], ['pitches', 'Pitches seen']].map(([v, l]) => `<option value="${v}" ${ui.zm === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-      <div class="chart-box" style="max-width:340px" id="zbox">${zoneChart(rows, ui.zm, 'hit')}</div><p class="muted small" style="text-align:center;margin:4px 0 0">Pitcher's view · red = better for the hitter</p></div>
+      <div class="chart-box" style="max-width:340px" id="zbox">${zoneChart(rows, ui.zm, 'hit')}</div><p class="muted small" style="text-align:center;margin:4px 0 0">Catcher's view · red = better for the hitter</p></div>
     <div class="panel"><div class="panel-h"><h2>Exit velo &amp; launch angle</h2><span class="note">Shaded box = 95+ mph at 8°–32°</span></div>${evlaChart(rows)}
       <div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}</div></div>
   </section>
@@ -1341,7 +1346,7 @@ function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
     <div class="panel"><div class="panel-h"><h2>Pitch locations</h2>
       ${segmented('loc-side', [['all', 'All'], ['R', 'vs RHH'], ['L', 'vs LHH']], ui.side, v => { ui.side = v; redrawPitcherCharts(rows, ui); $$('#loc-side button').forEach(b => { b.classList.toggle('on', b.dataset.v === v); b.setAttribute('aria-pressed', b.dataset.v === v); }); })}</div>
       <div class="chart-box" style="max-width:340px" id="locbox">${locationChart(ui.side === 'all' ? rows : rows.filter(r => r.bs === ui.side), ui.active)}</div>
-      <p class="muted small" style="text-align:center;margin:4px 0 0">Catcher's view · filter pitch types with the chips above</p></div>
+      <p class="muted small" style="text-align:center;margin:4px 0 0">Pitcher's view · filter pitch types with the chips above</p></div>
     <div class="panel"><div class="panel-h"><h2>Release point</h2></div><div class="chart-box" style="max-width:440px" id="relbox">${releaseChart(rows, ui.active)}</div></div>
   </section>
   <section class="panel"><div class="panel-h"><h2>Pitch mix by count</h2><span class="note">Bar width = share of pitches; number = pitches</span></div>${usageByCount(rows)}
@@ -1378,21 +1383,24 @@ function groupPAs(rows) {
   return out;
 }
 function pitchDesc(r) { return r.r ? RES_NAME[r.r] || r.r : CALL_NAME[r.c] || '—'; }
-function seqChart(pitches) {
-  const W = 230, H = 250, X = v => 115 + v * 52, Y = v => 222 - (v - 0.2) * 52;
-  let g = `<rect class="zone" x="${X(-ZW)}" y="${Y(ZT)}" width="${X(ZW) - X(-ZW)}" height="${Y(ZB) - Y(ZT)}"/>`;
+function seqChart(pitches, catcher = false) {
+  const W = 230, H = 250, sgn = catcher ? -1 : 1, X = v => 115 + sgn * v * 52, Y = v => 222 - (v - 0.2) * 52;
+  let g = `<rect class="zone" x="${Math.min(X(-ZW), X(ZW))}" y="${Y(ZT)}" width="${Math.abs(X(ZW) - X(-ZW))}" height="${Y(ZB) - Y(ZT)}"/>`;
   for (let k = 1; k < 3; k++) {
     g += `<line class="grid" x1="${X(-ZW + k * 2 * ZW / 3)}" x2="${X(-ZW + k * 2 * ZW / 3)}" y1="${Y(ZT)}" y2="${Y(ZB)}"/>`;
     g += `<line class="grid" y1="${Y(ZB + k * (ZT - ZB) / 3)}" y2="${Y(ZB + k * (ZT - ZB) / 3)}" x1="${X(-ZW)}" x2="${X(ZW)}"/>`;
   }
-  g += `<path class="plate" d="M${X(-0.71)},${H - 8} h${1.42 * 52} v-5 l-${1.42 * 26},-5 l-${1.42 * 26},5 Z"/>`;
+  const pl = 115 - 0.71 * 52, pw = 1.42 * 52;
+  g += catcher
+    ? `<path class="plate" d="M${pl},${H - 18} h${pw} v5 l-${pw / 2},5 l-${pw / 2},-5 Z"/>`
+    : `<path class="plate" d="M${pl},${H - 8} h${pw} v-5 l-${pw / 2},-5 l-${pw / 2},5 Z"/>`;
   pitches.forEach((r, n) => {
     if (r.px == null || r.pz == null) return;
     const x = X(Math.max(-2, Math.min(2, r.px))), y = Y(Math.max(0.1, Math.min(4.6, r.pz)));
     const cls = r.c === 'X' ? 'sq inplay' : r.wh ? 'sq whiff' : 'sq';
     g += `<g class="${cls}" data-tip="${esc(`<b>Pitch ${n + 1}</b> · ${r.b}-${r.s}<br>${esc(PT[r.pt].n)} ${F.f1(r.v)} mph<br>${esc(pitchDesc(r))}`)}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9" fill="${PT[r.pt].c}"/><text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle">${n + 1}</text></g>`;
   });
-  return svg(W, H, g, 'Pitch sequence, catcher\'s view');
+  return svg(W, H, g, catcher ? 'Pitch sequence, catcher\'s view' : 'Pitch sequence, pitcher\'s view');
 }
 function paCard(pa, role, n) {
   const rs = pa.rows, last = rs[rs.length - 1], first = rs[0];
@@ -1418,7 +1426,7 @@ function paCard(pa, role, n) {
       <span class="pa-pc muted small">${rs.length} pitch${rs.length === 1 ? '' : 'es'}</span>
     </header>
     <div class="pa-body">
-      <div class="pa-zone">${seqChart(rs)}</div>
+      <div class="pa-zone">${seqChart(rs, role === 'hit')}</div>
       <div class="tbl-wrap pa-tbl"><table><thead><tr><th class="nosort">#</th><th class="nosort">Count</th><th class="l nosort">Pitch</th><th class="nosort">Velo</th><th class="nosort">Spin</th><th class="nosort">IVB</th><th class="nosort">HB</th><th class="l nosort">Loc</th><th class="l nosort">Result</th><th class="nosort">EV</th><th class="nosort">LA</th><th class="nosort">Dist</th><th class="nosort">Bat Spd</th></tr></thead><tbody>${rows}</tbody></table></div>
     </div>
   </article>`;
@@ -1463,7 +1471,7 @@ async function pagePlayerGame(sid, gi, role, key) {
       [F.int(Math.round((st.swing || 0) * st.pitches)), 'Swings'], [F.int(Math.round((st.whiff || 0) * (st.swing || 0) * st.pitches)), 'Whiffs'], [F.pct(st.chase), 'Chase %'],
       [F.f1(st.maxEV), 'Max EV'], [F.avg(st.xwoba), 'xwOBA']];
     extra = `<section class="grid2">
-      <div class="panel"><div class="panel-h"><h2>Pitches seen</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
+      <div class="panel"><div class="panel-h"><h2>Pitches seen</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER), true)}</div>
         <div class="legend">${[...new Set(rows.map(r => r.pt))].map(k => `<span><i style="background:${PT[k].c}"></i>${PT[k].n}</span>`).join('')}</div></div>
       <div class="panel"><div class="panel-h"><h2>Balls in play</h2></div><div class="chart-box">${sprayChart(rows)}</div></div></section>`;
   } else {
@@ -1476,14 +1484,14 @@ async function pagePlayerGame(sid, gi, role, key) {
       { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'whiff', label: 'Whiff%', fmt: F.pct },
       { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'avgEV', label: 'EV', fmt: F.f1 }], ars, { sort: 'n' })}</section>
       <section class="grid2">
-        <div class="panel"><div class="panel-h"><h2>Pitch locations</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
+        <div class="panel"><div class="panel-h"><h2>Pitch locations</h2><span class="note">Pitcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
           <div class="legend">${ars.map(a => `<span><i style="background:${PT[a.pt].c}"></i>${PT[a.pt].n}</span>`).join('')}</div></div>
         ${veloByPitch(rows)}</section>`;
   }
   app.innerHTML = head + `
     <div class="strip pg-strip">${tiles.map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div>
     ${extra}
-    <section><div class="panel-h"><h2>${role === 'hit' ? 'Every at-bat' : 'Every batter faced'}</h2><span class="note">Numbers on the zone match the pitch order · catcher's view · hover a pitch for details</span></div>
+    <section><div class="panel-h"><h2>${role === 'hit' ? 'Every at-bat' : 'Every batter faced'}</h2><span class="note">Numbers on the zone match the pitch order · ${role === 'hit' ? 'catcher' : 'pitcher'}'s view · hover a pitch for details</span></div>
       <div class="pa-list">${pas.map((pa, n) => paCard(pa, role, n + 1)).join('')}</div></section>`;
 }
 
@@ -1593,7 +1601,7 @@ function pageGlossary() {
     ['Whiff %', 'Swinging strikes ÷ swings.'],
     ['CSW %', 'Called strikes plus swinging strikes ÷ pitches.'],
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
-    ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement and release charts are drawn from the pitcher\'s point of view; location and zone charts from the catcher\'s.'],
+    ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
     ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify with 5 or more plate appearances and pitchers with 5 or more batters faced. Non-qualified players are shown faded against the same pool.'],
     ['IP and R', 'Innings pitched and runs come from TrackMan outs-on-play and runs-scored tagging. They are close to the official box score but are not official, and runs are not split into earned and unearned.'],
