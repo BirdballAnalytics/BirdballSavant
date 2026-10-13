@@ -115,12 +115,63 @@ percentile panel. It is off until you turn it on, and nothing else on the site c
    names didn't match. Fix those in `scripts/trumedia.json` (stat names come from your
    TruMedia glossary page; team spellings go under `team_aliases`).
 
+If TruMedia's all-D1 query doesn't include each player's team, the pull looks up every
+team's roster to place players (Power 4 teams first). That adds a few minutes to the run;
+set `"label_all_teams": false` in `scripts/trumedia.json` to look up Power 4 rosters only.
+
 After that it refreshes every Monday on its own. To refresh sooner, go to Actions →
 Build and publish BirdballSavant → Run workflow. Setting `"enabled"` back to `false`
 removes all TruMedia data from the site on the next build.
 
 **Before turning it on, read Privacy below.** TruMedia data is licensed to BC; on a
 public site anyone could view and download it.
+
+## Video (AWRE)
+
+Players can watch AWRE video inside the site. A ▶ button appears next to every pitch and
+at-bat that has video (on a player's game page: Player → game log → click a date), a
+**Full game video** button appears on game pages, and the **Video** tab lists everything,
+including practice clips. The site stores only links; the video streams from AWRE or
+TruMedia, so players may need to be signed in there if those links require it.
+
+Video comes in two ways, and you can use both.
+
+**1. Through TruMedia (automatic, games only).** TruMedia shows AWRE video for NCAA games
+and has a `GameVideo` lookup by TrackMan game ID. Every build asks TruMedia about each BC
+TrackMan game it hasn't found video for yet (newest first, up to 60 a run, and again every
+4 days until video shows up). It uses the same three TruMedia secrets as the NCAA pull,
+so there's nothing to set up. The **Video** section of the Data status page shows what
+TruMedia returned, including the column names, so the matching can be adjusted if needed.
+If TruMedia refuses the first five games, the pull stops and shows the error. That usually
+means video isn't part of your TruMedia API access; ask ncaasupport@trumedianetworks.com.
+
+**2. Directly from AWRE (clip lists).** Export or copy clip links from AWRE into a sheet and
+upload it to `data/video/`. `templates/awre-clips-template.csv` shows the layout. Each row
+is one clip, and every column of `https://` links becomes a camera angle (the column name is
+the angle, e.g. `High Home`, `Center Field`). The other columns decide where the clip goes:
+
+| Row has | Clip goes to |
+|---|---|
+| `PitchUID` (TrackMan), or `GameID` + `PitchNo` | that exact pitch |
+| Date + `Inning` + `Batter` + `PitchofPA` (or `Balls`/`Strikes`) | that exact pitch |
+| Date + `Inning` + `Batter` | that whole at-bat |
+| Date only (+ `Opponent` or `Game` on doubleheader days) | the game's **Full game video** |
+| Date + `Player`, nothing else | that player's **Video** list (bullpens, BP) |
+| Date + `Title` containing practice / bullpen / BP | practice list on the **Video** tab |
+
+Names can be "Last, First" or "First Last". A date in the file name (e.g.
+`2026-10-14 bullpens.csv`) counts for rows without a Date column. The Data status page lists
+every clip row that didn't match and why. To rename camera angles, add them under
+`angle_names` in `scripts/video.json`; set `"enabled": false` there to take all video off
+the site.
+
+Links play right inside the site when they are direct video files (`.mp4`, `.mov`, `.webm`)
+or YouTube, Vimeo or Google Drive links. Other links (an AWRE or TruMedia player page) open
+in the same viewer with an **Open ↗** button if AWRE blocks showing it inside another site.
+If AWRE ever gives BC an API or a scheduled export, it can feed this same `data/video/` format.
+
+**Before adding video, read Privacy below.** On a public site anyone with the link could
+reach the clip links.
 
 ## Privacy
 
@@ -129,6 +180,14 @@ with the link can see the site and download the raw files in `data/`. If the dat
 stay private, options include a GitHub Enterprise organization (private Pages), or
 hosting the `site` folder behind a login with a service such as Cloudflare Pages +
 Cloudflare Access.
+
+## Saving to your phone's home screen
+
+- **iPhone (Safari):** open the site, tap the Share button, then **Add to Home Screen**.
+- **Android (Chrome):** open the site, tap the ⋮ menu, then **Add to Home screen** (or **Install app**).
+
+It opens full-screen like an app and always loads the latest data. The icon artwork is
+in `branding/icon.html` if it ever needs to change.
 
 ## Running it on your own computer
 
@@ -151,6 +210,8 @@ players against qualified BC players in the same season.
 data/                     TrackMan exports (upload new files here)
 scripts/build.py          turns data/ into site/data/*.json
 scripts/teams.json        team code → display name
+scripts/video.json        video settings (AWRE / TruMedia)
+data/video/               AWRE clip lists
 site/                     the website (index.html, app.js, app.css)
 .github/workflows/        GitHub Actions: build + publish on every upload
 ```
