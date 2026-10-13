@@ -67,6 +67,8 @@ async function loadMeta() {
   const ids = S.meta.seasons.map(s => s.id);
   S.season = ids.includes(saved) ? saved : ids[ids.length - 1];
   const nn = $('#nav-ncaa'); if (nn) nn.hidden = !(S.meta.ncaa?.years || []).length;
+  const vr = S.meta.video?.report, nv = $('#nav-video');
+  if (nv) nv.hidden = !(vr && (vr.pitches || vr.pas || vr.games || vr.players || vr.other));
   const fb = $('#foot-built');
   if (fb && S.meta.built) fb.textContent = 'Data updated ' + new Date(S.meta.built).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
@@ -100,7 +102,7 @@ async function loadSeason(id) {
     if (!byP.has(r.p)) byP.set(r.p, []); byP.get(r.p).push(r);
     if (!byH.has(r.h)) byH.set(r.h, []); byH.get(r.h).push(r);
   }
-  const se = { id, label: j.label, games: j.games, rows, byP, byH, cache: {} };
+  const se = { id, label: j.label, games: j.games, rows, byP, byH, cache: {}, clips: j.clips || [] };
   S.seasons[id] = se;
   return se;
 }
@@ -1069,15 +1071,19 @@ async function pageGame(sid, gi) {
     return [...m].map(([i, a]) => ({ i, name: pname(i), ...stats(a), ...pitchShape(a) }));
   };
   const intra = !g.opp;
+  const gameV = (g.vid || []).length ? vbtn([{ t: `${fmtDate(g.d, true)} ${g.opp ? `BC ${g.home ? 'vs' : '@'} ${teamName(g.opp)}` : 'Intrasquad'} · full game`, clips: g.vid }], 'Full game video', 'btn vbtn-hi') : '';
   const bcBat = lines('h', r => isBC(S.players[r.h].t)), bcPit = lines('p', r => isBC(S.players[r.p].t));
   const bb = rows.filter(r => r.c === 'X' && r.ev != null).sort((a, b) => b.ev - a.ev).slice(0, 15)
     .map(r => ({ i: r.h, name: pname(r.h), ev: r.ev, la: r.la, dist: r.dist, r: r.r, inn: r.inn, pit: r.p, team: S.players[r.h].t }));
   const batCols = [nameCol, C.PA, C.AB, C.H, C['2B'], C.HR, C.BB, C.K, C.bbe, C.avgEV, C.maxEV, { k: 'hh', label: 'Hard Hit', get: r => r.hhPct != null ? Math.round(r.hhPct * r.bbe) : null, fmt: F.int }, C.xwoba];
   const pitCols = [nameCol, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, { k: 'swk', label: 'Whiffs', get: r => r.whiff != null ? Math.round(r.whiff * r.swing * r.pitches) : 0, fmt: F.int }, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba];
+  const anyV = rows.some(r => r.vid != null);
+  const vcol = role => ({ k: 'vid', label: 'Video', l: true, get: r => rows.filter(x => (role === 'hit' ? x.h : x.p) === r.i && x.vid != null).length,
+    html: r => rows.some(x => (role === 'hit' ? x.h : x.p) === r.i && x.vid != null) ? `<a class="vbtn vbtn-sm" href="#pg-${sid}-${gi}-${role}-${esc(S.players[r.i].k)}" aria-label="Watch ${esc(niceName(pname(r.i)))}">▶ Watch</a>` : '' });
   if (g.nt) {
     app.innerHTML = `
   <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${g.bb ? 'Results + batted balls' : 'Results only'}</span>
-    <h1>BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}</h1></div><div class="controls"><a class="btn" href="#games">All games</a></div></div>
+    <h1>BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}</h1></div><div class="controls">${gameV}<a class="btn" href="#games">All games</a></div></div>
   <p class="muted small" style="margin:0">${g.bb ? 'Plate-appearance results plus TrackMan batted-ball data. Exit velocity, launch angle, xwOBA and the spray chart use these balls in play; pitch-level stats like swing and chase rates are not available for this game.' : 'No TrackMan file for this game. Plate-appearance results count toward AVG, OBP, SLG, wOBA, K% and BB%, and are left out of tracked stats like exit velocity and xwOBA.'}</p>
   <section><div class="panel-h"><h2>BC hitters</h2></div>${table('t-gbat', [nameCol, C.PA, C.AB, C.H, C['2B'], C['3B'], C.HR, C.BB, C.K, C.HBP, C.avg, C.obp, C.slg, ...(g.bb ? [C.bbe, C.avgEV, C.maxEV, C.xwoba] : [])], bcBat, { sort: 'PA', total: { ...stats(rows), _label: 'BC total' } })}</section>
   ${g.bb ? `<section class="grid-pp"><div class="panel"><div class="panel-h"><h2>Spray chart</h2></div><div class="chart-box">${sprayChart(rows, { showBatter: true })}</div></div>
@@ -1088,9 +1094,9 @@ async function pageGame(sid, gi) {
   app.innerHTML = `
   <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${esc(g.st)}</span>
     <h1>${intra ? 'Intrasquad' : `BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}`}</h1></div>
-    <div class="controls"><a class="btn" href="#games">All games</a></div></div>
-  <section><div class="panel-h"><h2>BC hitters</h2></div>${table('t-gbat', batCols, bcBat, { sort: 'PA' })}</section>
-  <section><div class="panel-h"><h2>BC pitchers</h2><span class="note">IP and runs come from TrackMan's play tagging</span></div>${table('t-gpit', pitCols, bcPit, { sort: 'pitches' })}</section>
+    <div class="controls">${gameV}<a class="btn" href="#games">All games</a></div></div>
+  <section><div class="panel-h"><h2>BC hitters</h2>${anyV ? '<span class="note">▶ opens that player\'s at-bats with video</span>' : ''}</div>${table('t-gbat', anyV ? [...batCols, vcol('hit')] : batCols, bcBat, { sort: 'PA' })}</section>
+  <section><div class="panel-h"><h2>BC pitchers</h2><span class="note">IP and runs come from TrackMan's play tagging</span></div>${table('t-gpit', anyV ? [...pitCols, vcol('pit')] : pitCols, bcPit, { sort: 'pitches' })}</section>
   <section><div class="panel-h"><h2>Hardest-hit balls</h2><span class="note">Both teams</span></div>
     ${table('t-gbb', [nameCol, { k: 'team', label: 'Team', l: true, fmt: v => esc(isBC(v) ? 'BC' : teamName(v)) }, { k: 'inn', label: 'Inn', fmt: F.int }, { k: 'ev', label: 'EV', fmt: F.f1 }, { k: 'la', label: 'LA', fmt: F.f1 }, { k: 'dist', label: 'Dist', fmt: F.int }, { k: 'r', label: 'Result', l: true, html: r => resBadge(r.r) }, { k: 'pit', label: 'Pitcher', l: true, html: r => plink(r.pit), get: r => pname(r.pit) }], bb, { sort: 'ev' })}</section>`;
 }
@@ -1242,7 +1248,9 @@ async function pagePlayer(key) {
   const hasNcaa = (S.meta.ncaa?.years || []).length > 0;
   if (hasNcaa && !S.pctPool) S.pctPool = ls.get('pctPool', 'p4');
   const alt = hasNcaa && S.pctPool === 'p4' ? await p4Alt(ui.season, role === 'hit' ? 'hitting' : 'pitching') : null;
-  app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa));
+  const pv = S.meta.video?.players?.[key] || [];
+  const pvHtml = pv.length ? `<section class="panel"><div class="panel-h"><h2>Video</h2><span class="note">Bullpens, BP and other clips</span></div>${clipList(pv, c => c.t || 'Clip')}</section>` : '';
+  app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa)) + pvHtml;
   const sel = $('#pl-season'); if (sel) sel.value = ui.season;
   bindPlayer(i, p, role, ui);
 }
@@ -1366,11 +1374,121 @@ function bindPlayer(i, p, role, ui) {
   const zm = $('#zm');
   if (zm) zm.onchange = () => { ui.zm = zm.value; const se = S.seasons[ui.season]; $('#zbox').innerHTML = zoneChart(se.byH.get(i) || [], ui.zm, 'hit'); };
 }
+/* ---------- video (AWRE / TruMedia links) ---------- */
+// Clips are links only; the video itself streams from AWRE / TruMedia.
+const clipsOf = r => (r.vid != null ? S.seasons[r.sid]?.clips[r.vid] : null) || [];
+const pitchClips = r => clipsOf(r).filter(c => !c.a);
+const paClips = rs => rs.flatMap(r => clipsOf(r).filter(c => c.a));
+function vbtn(items, label, cls = 'vbtn') {
+  if (!items.length) return '';
+  S.vreg = S.vreg || [];
+  S.vreg.push(items);
+  return `<button type="button" class="${cls}" data-v="${S.vreg.length - 1}" aria-label="${esc(label || 'Play video')}">${label ? `<span aria-hidden="true">▶</span> ${esc(label)}` : '▶'}</button>`;
+}
+// one queue item per pitch (all camera angles), at-bat clips first
+function paQueue(rs, title) {
+  const out = [], whole = paClips(rs);
+  if (whole.length) out.push({ t: `${title} · whole at-bat`, clips: whole });
+  rs.forEach((r, k) => { const c = pitchClips(r); if (c.length) out.push({ t: `${title} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} ${r.v != null ? F.f1(r.v) + ' mph' : ''} · ${pitchDesc(r)}`, clips: c }); });
+  return out;
+}
+function embedOf(u) {
+  let m;
+  if (/\.(mp4|webm|mov|m4v|m3u8)(\?|#|$)/i.test(u)) return { kind: 'video', src: u };
+  if ((m = u.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{6,})/))) return { kind: 'frame', src: `https://www.youtube-nocookie.com/embed/${m[1]}?autoplay=1&rel=0&playsinline=1` };
+  if ((m = u.match(/vimeo\.com\/(?:video\/)?(\d+)/))) return { kind: 'frame', src: `https://player.vimeo.com/video/${m[1]}?autoplay=1` };
+  if ((m = u.match(/drive\.google\.com\/file\/d\/([\w-]+)/))) return { kind: 'frame', src: `https://drive.google.com/file/d/${m[1]}/preview` };
+  return { kind: 'page', src: u };   // AWRE / TruMedia player page
+}
+function openVideo(queue, start = 0) {
+  if (!queue.length) return;
+  let dlg = $('#vmodal');
+  if (!dlg) {
+    dlg = document.createElement('dialog'); dlg.id = 'vmodal'; dlg.className = 'vmodal';
+    document.body.appendChild(dlg);
+    dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+    dlg.addEventListener('close', () => { dlg.innerHTML = ''; });
+  }
+  let at = start;
+  const speedKey = 'vspeed', angleKey = 'vangle';
+  const draw = () => {
+    const item = queue[at], clips = item.clips;
+    const want = ls.get(angleKey, null);
+    const ci = Math.max(0, clips.findIndex(c => c.l === want));
+    const c = clips[ci], e = embedOf(c.u);
+    const speed = +ls.get(speedKey, 1) || 1;
+    dlg.innerHTML = `<div class="vm-in">
+      <div class="vm-top"><div class="vm-title">${esc(item.t || 'Video')}</div>
+        <span class="vm-count muted small">${queue.length > 1 ? `${at + 1} of ${queue.length}` : ''}</span>
+        <button type="button" class="vm-x" aria-label="Close">✕</button></div>
+      <div class="vm-stage">${e.kind === 'video'
+        ? `<video src="${esc(e.src)}" controls autoplay playsinline preload="auto"></video>`
+        : `<iframe src="${esc(e.src)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`}</div>
+      <div class="vm-bar">
+        <div class="vm-angles">${clips.length > 1 ? clips.map((x, k) => `<button type="button" class="chip ${k === ci ? 'on' : ''}" data-angle="${esc(x.l)}">${esc(x.l)}</button>`).join('') : `<span class="muted small">${esc(c.l)}</span>`}</div>
+        ${e.kind === 'video' ? `<div class="vm-speed">${[0.25, 0.5, 1].map(v => `<button type="button" class="chip ${v === speed ? 'on' : ''}" data-speed="${v}">${v === 1 ? '1×' : v + '×'}</button>`).join('')}</div>` : ''}
+        <div class="vm-nav">${queue.length > 1 ? `<button type="button" class="btn" data-step="-1" ${at ? '' : 'disabled'}>‹ Prev</button><button type="button" class="btn" data-step="1" ${at < queue.length - 1 ? '' : 'disabled'}>Next ›</button>` : ''}
+          <a class="btn" href="${esc(c.u)}" target="_blank" rel="noopener">Open ↗</a></div>
+      </div>
+      <p class="vm-src muted small">${esc(c.s || '')}${e.kind === 'page' ? ' · if the clip doesn\'t show here, use Open ↗ (you may need to be signed in to ' + esc(c.s === 'TruMedia' ? 'TruMedia' : 'AWRE') + ')' : ''}</p>
+    </div>`;
+    const v = $('video', dlg);
+    if (v) {
+      v.playbackRate = speed;
+      v.addEventListener('ended', () => { if (at < queue.length - 1) { at++; draw(); } });
+    }
+    $('.vm-x', dlg).onclick = () => dlg.close();
+    $$('[data-angle]', dlg).forEach(b => b.onclick = () => { ls.set(angleKey, b.dataset.angle); draw(); });
+    $$('[data-speed]', dlg).forEach(b => b.onclick = () => { ls.set(speedKey, b.dataset.speed); draw(); });
+    $$('[data-step]', dlg).forEach(b => b.onclick = () => { at = Math.max(0, Math.min(queue.length - 1, at + +b.dataset.step)); draw(); });
+  };
+  dlg.onkeydown = e => {
+    if (e.key === 'ArrowRight' && at < queue.length - 1 && e.target.tagName !== 'VIDEO') { at++; draw(); }
+    if (e.key === 'ArrowLeft' && at > 0 && e.target.tagName !== 'VIDEO') { at--; draw(); }
+  };
+  draw();
+  if (!dlg.open) dlg.showModal();
+}
+function initVideo() {
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('[data-v]');
+    if (!b) return;
+    e.preventDefault();
+    openVideo(S.vreg?.[+b.dataset.v] || [], +(b.dataset.start || 0));
+  });
+}
+function clipList(clips, titleOf) {
+  return `<ul class="clip-list">${clips.map(c => `<li><span class="clip-d">${esc(c.d ? fmtDate(c.d, true) : '')}</span><span class="clip-t">${esc(titleOf(c))}</span>${vbtn([{ t: `${titleOf(c)}${c.d ? ' · ' + fmtDate(c.d, true) : ''}`, clips: [c] }], c.l)}</li>`).join('')}</ul>`;
+}
+async function pageVideo() {
+  setNav('video');
+  const V = S.meta.video || {}, other = V.other || [];
+  await Promise.all(S.meta.seasons.map(s => loadSeason(s.id)));
+  const games = [];
+  for (const s of [...S.meta.seasons].reverse()) {
+    const se = S.seasons[s.id];
+    se.games.forEach((g, gi) => {
+      const n = se.rows.filter(r => r.g === gi && r.vid != null).length;
+      if (n || g.vid) games.push({ se, g, gi, n });
+    });
+  }
+  games.sort((a, b) => b.g.d.localeCompare(a.g.d));
+  const plist = Object.entries(V.players || {}).map(([k, c]) => ({ i: S.pidx.get(k), c })).filter(o => o.i != null)
+    .sort((a, b) => S.players[a.i].n.localeCompare(S.players[b.i].n));
+  app.innerHTML = `<div class="phead"><div><span class="eyebrow">AWRE · TruMedia</span><h1>Video</h1></div></div>
+    <section class="panel"><div class="panel-h"><h2>Games with video</h2><span class="note">Open a game, or a player's game page, to watch pitch by pitch</span></div>
+      ${games.length ? `<ul class="clip-list">${games.map(o => `<li><span class="clip-d">${esc(fmtDate(o.g.d, true))}</span><span class="clip-t"><a href="#game-${o.se.id}-${o.gi}">${o.g.opp ? `BC ${o.g.home ? 'vs' : '@'} ${esc(teamName(o.g.opp))}` : 'Intrasquad'}</a>${o.n ? ` <span class="muted small">${F.int(o.n)} pitch${o.n === 1 ? '' : 'es'} with video</span>` : ''}</span>${(o.g.vid || []).map(c => vbtn([{ t: `${fmtDate(o.g.d, true)} full game`, clips: o.g.vid }], c.l)).slice(0, 1).join('')}</li>`).join('')}</ul>` : '<p class="empty">No game video matched yet.</p>'}</section>
+    ${plist.length ? `<section class="panel"><div class="panel-h"><h2>Player video</h2><span class="note">Bullpens, BP and other clips tagged to a player</span></div>
+      ${plist.map(o => `<h3 class="clip-h">${plink(o.i)}</h3>${clipList(o.c, c => c.t || 'Clip')}`).join('')}</section>` : ''}
+    ${other.length ? `<section class="panel"><div class="panel-h"><h2>Practice and other video</h2></div>${clipList(other, c => c.t || 'Clip')}</section>` : ''}`;
+}
+
 /* ---------- player game breakdown (pitch by pitch) ---------- */
 function logLink(se, r, role, i) {
   const gm = se.games[r.g];
   if (gm.nt) return `<a href="#game-${se.id}-${r.g}" title="Results-only game">${esc(fmtDate(r.d))}</a>`;
-  return `<a href="#pg-${se.id}-${r.g}-${role}-${esc(S.players[i].k)}" class="loglink">${esc(fmtDate(r.d))} <span aria-hidden="true">›</span></a>`;
+  const hasV = (role === 'hit' ? se.byH.get(i) : se.byP.get(i) || []).some(x => x.g === r.g && x.vid != null);
+  return `<a href="#pg-${se.id}-${r.g}-${role}-${esc(S.players[i].k)}" class="loglink">${esc(fmtDate(r.d))}${hasV ? ' <span class="vtag" title="Video available">▶</span>' : ''} <span aria-hidden="true">›</span></a>`;
 }
 function groupPAs(rows) {
   const out = []; let cur = null, key = null;
@@ -1409,6 +1527,8 @@ function paCard(pa, role, n) {
   const outs = first.o != null ? `${first.o} out${first.o === 1 ? '' : 's'}` : '';
   const bb = rs.find(r => r.c === 'X' && r.ev != null);
   const res = last.r ? resBadge(last.r) : '<span class="muted small">No result recorded</span>';
+  const vtitle = `${niceName(pname(first.h))} vs ${niceName(pname(first.p))}, ${first.top ? 'Top' : 'Bot'} ${first.inn}`;
+  const vq = paQueue(rs, vtitle), hasV = rs.some(r => pitchClips(r).length);
   const rows = rs.map((r, k) => `<tr class="${r.r ? 'pa-end' : ''}">
       <td>${k + 1}</td><td>${r.b}-${r.s}</td>
       <td class="l">${ptDot(r.pt)}${esc(PT[r.pt].n)}</td>
@@ -1416,7 +1536,7 @@ function paCard(pa, role, n) {
       <td class="l">${r.iz == null ? '—' : r.iz ? 'Zone' : '<span class="muted">Out</span>'}</td>
       <td class="l">${r.r ? resBadge(r.r) : esc(CALL_NAME[r.c] || '—')}</td>
       <td>${r.c === 'X' ? F.f1(r.ev) : ''}</td><td>${r.c === 'X' ? F.f1(r.la) : ''}</td><td>${r.c === 'X' ? F.int(r.dist) : ''}</td>
-      <td>${r.bat != null && r.sw ? F.f1(r.bat) : ''}</td></tr>`).join('');
+      <td>${r.bat != null && r.sw ? F.f1(r.bat) : ''}</td>${hasV ? `<td>${pitchClips(r).length ? vbtn([{ t: `${vtitle} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} · ${pitchDesc(r)}`, clips: pitchClips(r) }], '', 'vbtn vbtn-sm') : ''}</td>` : ''}</tr>`).join('');
   return `<article class="pa-card">
     <header class="pa-head">
       <span class="pa-n">${n}</span>
@@ -1424,10 +1544,11 @@ function paCard(pa, role, n) {
       <span class="pa-vs">${role === 'hit' ? 'vs' : 'to'} ${plink(opp)} <span class="muted small">${esc(oppHand)}</span></span>
       <span class="pa-res">${res}${bb ? ` <span class="muted small">${F.f1(bb.ev)} mph · ${F.f1(bb.la)}°${bb.dist != null ? ' · ' + F.int(bb.dist) + ' ft' : ''}${bb.xw != null ? ' · xwOBA ' + F.avg(bb.xw) : ''}</span>` : ''}</span>
       <span class="pa-pc muted small">${rs.length} pitch${rs.length === 1 ? '' : 'es'}</span>
+      ${vq.length ? `<span class="pa-v">${vbtn(vq, 'Watch at-bat')}</span>` : ''}
     </header>
     <div class="pa-body">
       <div class="pa-zone">${seqChart(rs, role === 'hit')}</div>
-      <div class="tbl-wrap pa-tbl"><table><thead><tr><th class="nosort">#</th><th class="nosort">Count</th><th class="l nosort">Pitch</th><th class="nosort">Velo</th><th class="nosort">Spin</th><th class="nosort">IVB</th><th class="nosort">HB</th><th class="l nosort">Loc</th><th class="l nosort">Result</th><th class="nosort">EV</th><th class="nosort">LA</th><th class="nosort">Dist</th><th class="nosort">Bat Spd</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="tbl-wrap pa-tbl"><table><thead><tr><th class="nosort">#</th><th class="nosort">Count</th><th class="l nosort">Pitch</th><th class="nosort">Velo</th><th class="nosort">Spin</th><th class="nosort">IVB</th><th class="nosort">HB</th><th class="l nosort">Loc</th><th class="l nosort">Result</th><th class="nosort">EV</th><th class="nosort">LA</th><th class="nosort">Dist</th><th class="nosort">Bat Spd</th>${hasV ? '<th class="nosort">Video</th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>
     </div>
   </article>`;
 }
@@ -1457,10 +1578,12 @@ async function pagePlayerGame(sid, gi, role, key) {
   // prev / next games for this player in the season
   const mine = [...new Set((role === 'hit' ? se.byH.get(i) : se.byP.get(i) || []).filter(r => !se.games[r.g].nt).map(r => r.g))].sort((a, b) => a - b);
   const pos = mine.indexOf(gi), prev = mine[pos - 1], next = mine[pos + 1];
+  const allQ = groupPAs(rows).flatMap(pa => paQueue(pa.rows, `${niceName(pname(pa.rows[0].h))} vs ${niceName(pname(pa.rows[0].p))}, ${pa.rows[0].top ? 'Top' : 'Bot'} ${pa.rows[0].inn}`));
+  const allV = allQ.length ? vbtn(allQ, `Watch all (${allQ.length})`, 'btn vbtn-hi') : '';
   const nav = `<div class="controls">
     ${prev != null ? `<a class="btn" href="#pg-${sid}-${prev}-${role}-${esc(key)}">‹ ${esc(fmtDate(se.games[prev].d))}</a>` : ''}
     ${next != null ? `<a class="btn" href="#pg-${sid}-${next}-${role}-${esc(key)}">${esc(fmtDate(se.games[next].d))} ›</a>` : ''}
-    <a class="btn" href="#game-${sid}-${gi}">Full game</a></div>`;
+    <a class="btn" href="#game-${sid}-${gi}">Full game</a>${allV}</div>`;
   const head = `<div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${esc(opp)} · ${role === 'hit' ? 'Hitting' : 'Pitching'}</span>
     <h1><a href="#player-${esc(key)}" class="plain">${p.num != null ? `<span class="jersey">#${esc(p.num)}</span>` : ''}${esc(niceName(p.n))}</a></h1></div>${nav}</div>`;
   if (!rows.length) { app.innerHTML = head + '<p class="empty">No tracked pitches for this player in this game.</p>'; return; }
@@ -1615,6 +1738,18 @@ function pageGlossary() {
   app.innerHTML = `<div class="phead"><div><span class="eyebrow">Reference</span><h1>Glossary</h1></div></div>
     <div class="panel prose" style="max-width:none"><dl class="gloss">${g.map(([t, d]) => `<dt>${esc(t)}</dt><dd>${esc(d)}</dd>`).join('')}</dl></div>`;
 }
+function videoStatus(V) {
+  const r = V?.report; if (!r) return '';
+  if (!r.enabled) return `<section class="panel"><div class="panel-h"><h2>Video</h2></div><p style="margin:0">Turned off in scripts/video.json.</p></section>`;
+  const t = r.trumedia;
+  return `<section class="panel"><div class="panel-h"><h2>Video</h2><span class="note">AWRE clip lists in data/video/ and TruMedia GameVideo</span></div>
+    <p style="margin:0 0 8px"><b>${F.int(r.pitches)}</b> pitches · <b>${F.int(r.pas)}</b> at-bats · <b>${F.int(r.games)}</b> full games · <b>${F.int(r.players)}</b> player clips · <b>${F.int(r.other)}</b> other clips</p>
+    ${t ? `<p class="small" style="margin:4px 0"><b>TruMedia</b> (${esc(new Date(t.ran).toLocaleString())}): ${esc(t.status)}${(t.columns || []).length ? ` · columns returned: ${esc(t.columns.join(', '))}` : ''}${Object.keys(t.errors || {}).length ? `<br><span class="err" style="padding:0">${esc(Object.entries(t.errors).slice(0, 3).map(([g, e]) => g + ': ' + e).join(' | '))}</span>` : ''}</p>` : '<p class="small muted" style="margin:4px 0">TruMedia video has not run yet.</p>'}
+    ${(r.sources || []).map(s => `<p class="small" style="margin:4px 0"><b>${esc(s.file)}</b>: ${s.status ? esc(s.status) : `${F.int(s.rows)} clip rows → ${['pitch', 'pa', 'game', 'player', 'other', 'none'].filter(k => s[k]).map(k => `${F.int(s[k])} ${{ pitch: 'pitches', pa: 'at-bats', game: 'games', player: 'player clips', other: 'other', none: 'not matched' }[k]}`).join(', ')}`}</p>`).join('')}
+    ${(r.unmatched || []).length ? `<details><summary class="small">Clips that didn't match (${r.unmatched.length}${r.unmatched.length >= 60 ? '+' : ''})</summary>
+      ${table('t-vun', [{ k: 'src', label: 'File', l: true }, { k: 'why', label: 'Why', l: true, html: x => `<span style="white-space:normal">${esc(x.why)}</span>` }, { k: 'row', label: 'Row', l: true, html: x => `<span style="white-space:normal">${esc(Object.entries(x.row).map(([k, v]) => k + ': ' + v).join(' · '))}</span>` }], r.unmatched, { nosort: true })}</details>` : ''}
+  </section>`;
+}
 function pageData() {
   setNav('');
   const m = S.meta;
@@ -1637,6 +1772,7 @@ function pageData() {
     <p style="margin:0 0 10px"><b>${esc(m.ncaa.report.status)}</b></p>
     ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${r[sd].team_source ? ` · teams from ${esc(r[sd].team_source)}${r[sd].players_with_team != null ? ` (${F.int(r[sd].players_with_team)} placed)` : ''}` : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}</p>`).join('')}
   </section>` : ''}
+  ${videoStatus(m.video)}
   ${(m.corrections || []).length ? `<section class="panel"><div class="panel-h"><h2>TrackMan corrections</h2><span class="note">From scripts/corrections.json</span></div>
     ${table('t-corr', [{ k: 'batter', label: 'Batter', l: true }, { k: 'date', label: 'Date', l: true, fmt: v => esc(fmtDate(v, true)) }, { k: 'pitchno', label: 'Pitch #', fmt: F.int }, { k: 'note', label: 'Fix', l: true, html: r => `<span style="white-space:normal">${esc(r.note || '')}</span>` }, { k: 'applied', label: 'Status', l: true, fmt: v => v ? 'Applied' : 'Pitch not found' }], m.corrections, { nosort: true })}</section>` : ''}
   <section class="panel prose" style="max-width:none"><h2 style="margin-bottom:8px">Adding new games</h2>
@@ -1698,6 +1834,7 @@ function initSearch() {
 /* ---------- router ---------- */
 async function route() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ''));
+  S.vreg = [];
   try {
     if (!S.meta.seasons.length) { app.innerHTML = '<p class="empty">No data has been uploaded yet. Add TrackMan files to the data folder of the repository.</p>'; return; }
     if (!h || h === 'home') await pageHome();
@@ -1712,6 +1849,7 @@ async function route() {
     else if (h === 'ncaa') await pageNcaa();
     else if (h.startsWith('ncaa-p-')) { const m = h.match(/^ncaa-p-(\d{4})-(hitting|pitching)-(.+)$/); if (m) await pageNcaaPlayer(+m[1], m[2], m[3]); }
     else if (h === 'glossary') pageGlossary();
+    else if (h === 'video') await pageVideo();
     else if (h === 'data') pageData();
     else await pageHome();
   } catch (err) {
@@ -1729,6 +1867,7 @@ window.addEventListener('hashchange', () => { const changedPage = location.hash 
   initSearch();
   initTooltips();
   initTheme();
+  initVideo();
   lastHash = location.hash;
   route();
 })();
