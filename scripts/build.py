@@ -398,7 +398,11 @@ def parse_result(txt: str):
     return None, "", 0
 
 
-def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
+BB_COLS = ["ExitSpeed", "Angle", "Direction", "Distance", "HangTime"]
+AUTO_HT = {"GroundBall": "GB", "LineDrive": "LD", "FlyBall": "FB", "Popup": "PU", "Bunt": "BU"}
+
+
+def build_results(results, known_bc: list[str], aliases: dict, teams: dict, trackman_games: set | None = None):
     import difflib
     rows, report = [], []
     seen_games = set()
@@ -428,6 +432,8 @@ def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
         rc, bc_ = result_col(df), col(df, "batter")
         dc, oc = col(df, "date", "gamedate"), col(df, "opponent", "opp", "team")
         bcol, scol = col(df, "balls"), col(df, "strikes")
+        bbc = {c: col(df, c.lower()) for c in BB_COLS}
+        ahc, gidc = col(df, "autohittype", "taggedhittype"), col(df, "gameid")
         pcol, thcol, icol = col(df, "pitcher"), col(df, "throws", "pitcherthrows", "hand"), col(df, "inning", "inn")
         df = df[df[bc_].astype(str).str.strip().ne("") & df[rc].astype(str).str.strip().ne("")]
         bad, matched = [], {}
@@ -441,6 +447,8 @@ def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
             if d is None:
                 continue
             ev, ht, outs = parse_result(r[rc])
+            if not ht and ahc and str(r[ahc]).strip() in AUTO_HT and ev not in (None, "K", "BB", "HBP"):
+                ht = AUTO_HT[str(r[ahc]).strip()]
             if ev is None:
                 bad.append(str(r[rc]))
                 continue
@@ -465,7 +473,24 @@ def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
                 "TaggedHitType": {"GB": "GroundBall", "LD": "LineDrive", "FB": "FlyBall", "PU": "Popup", "BU": "Bunt"}.get(ht, np.nan),
                 "OutsOnPlay": outs, "RunsScored": 0, "nt": 1,
                 "k2": (1.0 if num(r[scol]) == 2 else 0.0) if scol else np.nan,
+                **{c: (num(r[bbc[c]]) if bbc[c] else np.nan) for c in BB_COLS},
+                "_tmgid": str(r[gidc]).strip() if gidc and str(r[gidc]).strip() not in ("", "nan") else "",
             })
+        tm_ids = {x["_tmgid"] for x in file_rows if x["_tmgid"]}
+        if trackman_games and tm_ids & trackman_games:
+            log(f"  ! {path.name}: the TrackMan file for this game is already loaded, so this results file was skipped")
+            report.append({"file": path.name, "status": "skipped: the TrackMan file for this game is already loaded"})
+            continue
+        # Batted-ball tracking: counts if most balls in play carry an exit velocity
+        bip = [x for x in file_rows if x["call"] == "X" and x["pa"] != "SH"]
+        tracked = sum(1 for x in bip if x["ExitSpeed"] == x["ExitSpeed"] and 10 <= x["ExitSpeed"] <= 130)
+        has_bb = bool(bip) and tracked >= 0.6 * len(bip)
+        for x in file_rows:
+            x["nt"] = 2 if has_bb else 1
+            ev_ok = x["call"] == "X" and x["ExitSpeed"] == x["ExitSpeed"] and 10 <= x["ExitSpeed"] <= 130
+            if not ev_ok:
+                for c in BB_COLS:
+                    x[c] = np.nan
         gids = {x["GameID"] for x in file_rows}
         dup = gids & seen_games
         if dup:
@@ -481,13 +506,17 @@ def build_results(results, known_bc: list[str], aliases: dict, teams: dict):
         rows += file_rows
         report.append({
             "file": path.name, "status": "ok", "date": file_rows[0]["gdate"].isoformat(), "opp": file_rows[0]["PitcherTeam"],
-            "pa": len(file_rows), "unread": bad,
+            "pa": len(file_rows), "unread": bad, "batted_balls": tracked if has_bb else 0,
             "names": [{"raw": k, "as": v} for k, v in matched.items()],
         })
         log(f"  {path.name}: {len(file_rows)} PA on {file_rows[0]['gdate']} vs {file_rows[0]['PitcherTeam']}"
+            + (f"; {tracked} tracked batted balls" if has_bb else "")
             + (f"; unreadable results: {bad}" if bad else "")
             + (f"; names matched: {matched}" if matched else ""))
-    return pd.DataFrame(rows), report
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.drop(columns=["_tmgid"])
+    return out, report
 
 
 # ----------------------------------------------------------------------------
@@ -554,6 +583,10 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     # Out-of-range tracking values are blanked rather than trusted
     df.loc[(df["ExitSpeed"] < 10) | (df["ExitSpeed"] > 130), "ExitSpeed"] = np.nan
     df.loc[(df["RelSpeed"] < 40) | (df["RelSpeed"] > 105), "RelSpeed"] = np.nan
+    # Bat tracking: readings outside 50-95 mph are checked swings, bunts or tracking errors.
+    # Drop the whole reading (speed and attack angles) for that swing.
+    bad_bat = (df["BatSpeed"] < 50) | (df["BatSpeed"] > 95)
+    df.loc[bad_bat, ["BatSpeed", "VerticalAttackAngle", "HorizontalAttackAngle"]] = np.nan
     df.loc[~df["call"].eq("X"), ["ExitSpeed", "Angle", "Direction", "Distance"]] = np.nan
     return df
 
@@ -687,7 +720,6 @@ def build():
         df = clean(df)
         df, corr_report = apply_corrections(df)
         df = flag_two_strikes(df)
-        df = fit_expected(df)
         for c in ("Batter", "Pitcher"):
             df[c] = df[c].replace(aliases)
     df["nt"] = 0
@@ -697,10 +729,9 @@ def build():
     if results:
         known = sorted(set(df.loc[df["BatterTeam"] == BC_CANON, "Batter"].dropna()) |
                        set(df.loc[df["PitcherTeam"] == BC_CANON, "Pitcher"].dropna()))
-        rdf, res_report = build_results(results, known, aliases, teams)
+        tm_games = set(df["GameID"].dropna().astype(str)) if not df.empty else set()
+        rdf, res_report = build_results(results, known, aliases, teams, tm_games)
         if not rdf.empty:
-            for c in ("xba", "xslg", "xwv"):
-                rdf[c] = np.nan
             df = pd.concat([df, rdf], ignore_index=True)
         for m in manifest:
             rep = next((x for x in res_report if x["file"] == m["file"]), None)
@@ -708,6 +739,12 @@ def build():
                 m.update({k: v for k, v in rep.items() if k != "file"})
                 if rep["status"] != "ok":
                     m["rows"] = 0
+
+    if not df.empty and "call" in df.columns:
+        df = fit_expected(df)
+        # results games without batted-ball tracking: keep their in-play rows out of expected stats
+        untracked = df["nt"].eq(1)
+        df.loc[untracked, ["xba", "xslg", "xwv"]] = np.nan
 
     # Players: BC players keyed by name (TrackMan IDs sometimes change between
     # seasons); opponents keyed by team + name.
@@ -806,7 +843,7 @@ def build():
             opp = opps[0] if opps else ""
             st = gg["Stadium"].dropna()
             gtab.append({
-                "id": g, "d": gd.isoformat(), "opp": opp, "nt": bool(gg["nt"].eq(1).all()),
+                "id": g, "d": gd.isoformat(), "opp": opp, "nt": bool(gg["nt"].ge(1).all()), "bb": bool(gg["nt"].eq(2).all()),
                 "home": home == BC_CANON if opp else True,
                 "st": st.iloc[0] if len(st) else "",
                 "n": int(len(gg)),
@@ -865,8 +902,8 @@ def build():
         bc_games = len(gtab)
         seasons_meta.append({
             "id": sid, "label": label, "file": fname, "games": bc_games,
-            "pitches": int((sdf["nt"] != 1).sum()), "resultsGames": int(sum(g["nt"] for g in gtab)),
-            "resultsPA": int((sdf["nt"] == 1).sum()), "start": min(g["d"] for g in gtab), "end": max(g["d"] for g in gtab),
+            "pitches": int((sdf["nt"] == 0).sum()), "resultsGames": int(sum(g["nt"] for g in gtab)),
+            "resultsPA": int((sdf["nt"] >= 1).sum()), "start": min(g["d"] for g in gtab), "end": max(g["d"] for g in gtab),
         })
         log(f"  {label}: {bc_games} games, {len(sdf):,} pitches -> {fname}")
 
