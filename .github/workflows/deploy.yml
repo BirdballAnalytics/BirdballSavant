@@ -64,6 +64,29 @@ jobs:
           path: site/data/ncaa-*.json
           key: trumedia-${{ github.run_id }}
 
+      - name: Restore TruMedia video links
+        uses: actions/cache/restore@v4
+        with:
+          path: site/data/video-tm
+          key: video-${{ github.run_id }}
+          restore-keys: video-
+
+      - name: Pull AWRE game video links from TruMedia
+        continue-on-error: true
+        env:
+          TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
+          TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
+          TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
+        run: python scripts/video_pull.py
+
+      - name: Save TruMedia video links for next time
+        uses: actions/cache/save@v4
+        if: always() && hashFiles('site/data/video-tm/*.json') != ''
+        continue-on-error: true
+        with:
+          path: site/data/video-tm
+          key: video-${{ github.run_id }}
+
       - name: Build data files from everything in data/
         run: python scripts/build.py
 
