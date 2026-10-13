@@ -22,6 +22,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import video  # noqa: E402  (AWRE / TruMedia clip matching)
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 OUT_DIR = ROOT / "site" / "data"
@@ -116,6 +119,7 @@ def load_all() -> tuple[pd.DataFrame, list[tuple[Path, pd.DataFrame]], list[dict
         p for p in DATA_DIR.rglob("*")
         if p.is_file() and p.suffix.lower() in {".csv", ".xlsx", ".xls"}
         and not p.name.startswith(("~$", "."))
+        and "video" not in p.relative_to(DATA_DIR).parts[:-1]   # data/video/ holds AWRE clip lists
     )
     log(f"Found {len(files)} data file(s) in data/")
     frames, results, manifest, executions = [], [], [], []
@@ -754,6 +758,14 @@ def build():
     df["pkey"] = [pkey(n, t) for n, t in zip(df["Pitcher"], df["PitcherTeam"])]
     df["bkey"] = [pkey(n, t) for n, t in zip(df["Batter"], df["BatterTeam"])]
 
+    # Video links (AWRE clip lists in data/video/ + TruMedia GameVideo)
+    df = df.reset_index(drop=True)
+    vclips, _, vextra, vreport = video.attach(df, ROOT, OUT_DIR, BC_CANON, parse_filename, teams)
+    log(f"Video: {vreport['pitches']} pitches, {vreport['pas']} at-bats, {vreport['games']} games, "
+        f"{vreport['players']} player clips, {vreport['other']} other clips"
+        + (f"; {len(vreport['unmatched'])} clip rows not matched (see Data status)" if vreport["unmatched"] else ""))
+    df["_vid"] = pd.Series({i: c for i, c in vclips.items()}, dtype=object).reindex(df.index)
+
     players: dict[str, dict] = {}
 
     def add_player(key, name, team):
@@ -847,6 +859,7 @@ def build():
                 "home": home == BC_CANON if opp else True,
                 "st": st.iloc[0] if len(st) else "",
                 "n": int(len(gg)),
+                **({"vid": vextra["games"][g]} if g in vextra["games"] else {}),
             })
         sdf["gi"] = sdf["GameID"].map(gidx)
         sdf = sdf.sort_values(["gi", "PitchNo"], kind="stable")
@@ -895,9 +908,23 @@ def build():
             "nt": [int(x) for x in sdf["nt"].fillna(0)],
             "k2": [r(x, 0) for x in sdf["k2"]],
         }
+        # video: index into this season's clip list (None = no video for that pitch)
+        clip_list, clip_ix = [], {}
+        vcol = []
+        for c in sdf["_vid"]:
+            if isinstance(c, list) and c:
+                key = json.dumps(c, sort_keys=True)
+                if key not in clip_ix:
+                    clip_ix[key] = len(clip_list)
+                    clip_list.append(c)
+                vcol.append(clip_ix[key])
+            else:
+                vcol.append(None)
+        if clip_list:
+            cols["vid"] = vcol
         label = sdf["slabel"].iloc[0]
         fname = f"season-{sid}.json"
-        (OUT_DIR / fname).write_text(json.dumps({"id": sid, "label": label, "games": gtab, "cols": cols},
+        (OUT_DIR / fname).write_text(json.dumps({"id": sid, "label": label, "games": gtab, "cols": cols, "clips": clip_list},
                                                 separators=(",", ":")))
         bc_games = len(gtab)
         seasons_meta.append({
@@ -913,6 +940,7 @@ def build():
         "seasons": seasons_meta, "files": manifest, "teams": teams,
         "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report,
         "ncaa": ncaa_index(),
+        "video": {"report": vreport, "players": vextra["players"], "other": vextra["other"]},
         "weights": W,
     }
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))

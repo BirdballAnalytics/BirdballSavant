@@ -1,0 +1,12 @@
+{
+  "_note": "Video on BirdballSavant. Clips come from TruMedia (AWRE video for NCAA games, matched by TrackMan GameID) and from AWRE clip lists uploaded to data/video/. The site only stores links; the video itself stays on AWRE/TruMedia. Set enabled to false to take every video link off the site.",
+  "enabled": true,
+  "trumedia": {
+    "enabled": true,
+    "_recheck_days": "A game with no video yet is asked about again after this many days.",
+    "recheck_days": 4,
+    "max_games_per_run": 60
+  },
+  "_angle_names": "Optional: rename camera columns from TruMedia or AWRE files, e.g. \"highHomeUrl\": \"High home\".",
+  "angle_names": {}
+}
