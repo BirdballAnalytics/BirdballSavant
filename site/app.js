@@ -124,8 +124,8 @@ function stats(rows) {
     fast: 0, vats: [], ideal: 0, hats: [], sqN: 0, sq: 0, blast: 0, k2PA: 0, k2W: 0 };
   for (const r of rows) {
     t.games.add(r.sid + ':' + r.g);
-    const nt = r.nt === 1;
-    if (!nt) {
+    const nt = r.nt === 1;          // results-only PA with no tracking at all
+    if (!r.nt) {                     // pitch-by-pitch TrackMan rows only
     t.pitches++;
     if (r.sw) { t.sw++; if (r.wh) t.wh++; }
     if (r.iz === true) { t.zn++; t.locN++; if (r.sw) { t.zsw++; if (!r.wh) t.zcon++; } }
@@ -866,7 +866,7 @@ async function pageHome() {
 }
 function gameRow(se, g) {
   const opp = g.opp ? `${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}` : 'Intrasquad';
-  return `<a class="grow" href="#game-${se.id}-${g.gi}"><span class="gd">${esc(fmtDate(g.d))}</span><span class="go">${opp}</span><span class="gm">${g.nt ? `${F.int(g.n)} PA · results only` : `${F.int(g.n)} pitches`}</span></a>`;
+  return `<a class="grow" href="#game-${se.id}-${g.gi}"><span class="gd">${esc(fmtDate(g.d))}</span><span class="go">${opp}</span><span class="gm">${g.nt ? `${F.int(g.n)} PA · ${g.bb ? 'results + batted balls' : 'results only'}` : `${F.int(g.n)} pitches`}</span></a>`;
 }
 
 function execPct(v) { return v && v[1] ? v[0] / v[1] : null; }
@@ -1071,10 +1071,13 @@ async function pageGame(sid, gi) {
   const pitCols = [nameCol, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, { k: 'swk', label: 'Whiffs', get: r => r.whiff != null ? Math.round(r.whiff * r.swing * r.pitches) : 0, fmt: F.int }, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba];
   if (g.nt) {
     app.innerHTML = `
-  <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · Results only</span>
+  <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${g.bb ? 'Results + batted balls' : 'Results only'}</span>
     <h1>BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}</h1></div><div class="controls"><a class="btn" href="#games">All games</a></div></div>
-  <p class="muted small" style="margin:0">No TrackMan file for this game. Plate-appearance results count toward AVG, OBP, SLG, wOBA, K% and BB%, and are left out of tracked stats like exit velocity and xwOBA.</p>
-  <section><div class="panel-h"><h2>BC hitters</h2></div>${table('t-gbat', [nameCol, C.PA, C.AB, C.H, C['2B'], C['3B'], C.HR, C.BB, C.K, C.HBP, C.avg, C.obp, C.slg], bcBat, { sort: 'PA', total: { ...stats(rows), _label: 'BC total' } })}</section>`;
+  <p class="muted small" style="margin:0">${g.bb ? 'Plate-appearance results plus TrackMan batted-ball data. Exit velocity, launch angle, xwOBA and the spray chart use these balls in play; pitch-level stats like swing and chase rates are not available for this game.' : 'No TrackMan file for this game. Plate-appearance results count toward AVG, OBP, SLG, wOBA, K% and BB%, and are left out of tracked stats like exit velocity and xwOBA.'}</p>
+  <section><div class="panel-h"><h2>BC hitters</h2></div>${table('t-gbat', [nameCol, C.PA, C.AB, C.H, C['2B'], C['3B'], C.HR, C.BB, C.K, C.HBP, C.avg, C.obp, C.slg, ...(g.bb ? [C.bbe, C.avgEV, C.maxEV, C.xwoba] : [])], bcBat, { sort: 'PA', total: { ...stats(rows), _label: 'BC total' } })}</section>
+  ${g.bb ? `<section class="grid-pp"><div class="panel"><div class="panel-h"><h2>Spray chart</h2></div><div class="chart-box">${sprayChart(rows, { showBatter: true })}</div></div>
+    <div><div class="panel-h"><h2>Hardest-hit balls</h2></div>${table('t-gbb', [nameCol, { k: 'ev', label: 'EV', fmt: F.f1 }, { k: 'la', label: 'LA', fmt: F.f1 }, { k: 'dist', label: 'Dist', fmt: F.int }, { k: 'r', label: 'Result', l: true, html: r => resBadge(r.r) }],
+      rows.filter(r => r.c === 'X' && r.ev != null).sort((a, b) => b.ev - a.ev).slice(0, 15).map(r => ({ i: r.h, name: pname(r.h), ev: r.ev, la: r.la, dist: r.dist, r: r.r })), { sort: 'ev' })}</div></section>` : ''}`;
     return;
   }
   app.innerHTML = `
@@ -1468,7 +1471,7 @@ function pageGlossary() {
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
     ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify with 5 or more plate appearances and pitchers with 5 or more batters faced. Non-qualified players are shown faded against the same pool.'],
     ['IP and R', 'Innings pitched and runs come from TrackMan outs-on-play and runs-scored tagging. They are close to the official box score but are not official, and runs are not split into earned and unearned.'],
-    ['Results-only games', 'Games uploaded as plate-appearance results instead of TrackMan. They count toward PA, AB, hits, AVG, OBP, SLG, wOBA, K%, BB% and batted-ball type (from the scorebook notation), and are left out of everything that needs tracking: pitch counts, exit velocity, xBA/xSLG/xwOBA, swing and chase rates.'],
+    ['Results-only games', 'Games uploaded as plate-appearance results instead of a full TrackMan file. They count toward PA, AB, hits, AVG, OBP, SLG, wOBA, K%, BB%, 2K Win and batted-ball type. If the file also has TrackMan batted-ball columns (ExitSpeed, Angle, Direction, Distance), those balls in play also count toward exit velocity, hard-hit and barrel rates, xBA/xSLG/xwOBA and the spray charts. Pitch-level stats (pitch counts, swing, chase and whiff rates, bat tracking) only come from full TrackMan files.'],
     ['2K Win %', 'Share of plate appearances that reached two strikes and did not end in a strikeout (a hit, walk, HBP or ball in play all count as wins). Uses TrackMan and results-only games.'],
     ['Execution', 'Hit-and-run, stolen bases, bunting, 3-2 and the other categories on the Execution tab come straight from the coaching staff\'s weekly execution chart, matched to players by jersey number. Green means the player or team is at or above the staff goal for that category; red means below it.'],
     ['Data corrections', 'A few TrackMan tagging mistakes confirmed by the staff are fixed during every build (listed on the Data status page and in scripts/corrections.json).'],
