@@ -5,7 +5,8 @@
     "enabled": true,
     "_recheck_days": "A game with no video yet is asked about again after this many days.",
     "recheck_days": 4,
-    "max_games_per_run": 60
+    "max_games_per_run": 60,
+    "time_limit_minutes": 10
   },
   "_angle_names": "Optional: rename camera columns from TruMedia or AWRE files, e.g. \"highHomeUrl\": \"High home\".",
   "angle_names": {}

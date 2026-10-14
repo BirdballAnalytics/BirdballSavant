@@ -51,7 +51,7 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     report_file = build.OUT_DIR / "video-tm-report.json"
     report = {"ran": datetime.now(timezone.utc).isoformat(timespec="seconds"), "status": "", "asked": 0,
-              "with_video": 0, "errors": {}, "columns": []}
+              "with_video": 0, "empty": 0, "errors": {}, "columns": [], "sample": None, "games_known": 0}
 
     def finish(status):
         report["status"] = status
@@ -68,6 +68,8 @@ def main():
         return finish("skipped: TruMedia secrets are not set in the repository")
 
     games = bc_games()
+    report["games_known"] = len(games)
+    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"   # Run workflow button: ask again now
     now = datetime.now(timezone.utc)
     recheck = timedelta(days=float(tcfg.get("recheck_days", 4)))
     todo = []
@@ -78,8 +80,8 @@ def main():
                 old = json.loads(f.read_text())
                 if old.get("rows"):
                     continue                       # already have clips for this game
-                if now - datetime.fromisoformat(old["pulled"]) < recheck:
-                    continue                       # asked recently, nothing yet
+                if not old.get("error") and not manual and now - datetime.fromisoformat(old["pulled"]) < recheck:
+                    continue                       # asked recently, TruMedia had nothing yet
             except (ValueError, KeyError):
                 pass
         todo.append(gid)
@@ -88,7 +90,7 @@ def main():
         return finish(f"up to date ({len(games)} BC games checked earlier)")
 
     try:
-        tm = trumedia.TruMedia(user, site, master)
+        tm = trumedia.TruMedia(user, site, master, float(tcfg.get("time_limit_minutes", 10)))
     except Exception as e:
         return finish(f"could not sign in to TruMedia ({str(e)[:200]})")
 
@@ -102,7 +104,15 @@ def main():
             rec["rows"] = df.to_dict(orient="records")
             cols_seen.update(rec["columns"])
             report["with_video"] += bool(rec["rows"])
-            log(f"  {gid}: {len(rec['rows'])} rows")
+            report["empty"] += not rec["rows"]
+            if rec["rows"] and report["sample"] is None:
+                report["sample"] = {"gid": gid, "columns": rec["columns"],
+                                    "rows": [{k: str(v)[:160] for k, v in r.items()} for r in rec["rows"][:3]]}
+            log(f"  {gid}: {len(rec['rows'])} rows" + (f"; columns: {rec['columns']}" if rec["rows"] and report["with_video"] == 1 else ""))
+        except trumedia.OutOfTime:
+            report["time_limit_hit"] = True
+            log("  ! time limit reached; the remaining games are asked next run")
+            break
         except Exception as e:
             rec["error"] = str(e)[:300]
             report["errors"][gid] = rec["error"]
@@ -113,7 +123,8 @@ def main():
             report["columns"] = sorted(cols_seen)
             return finish("stopped: TruMedia refused the first 5 games (see errors); check that video is part of your TruMedia access")
     report["columns"] = sorted(cols_seen)
-    finish(f"asked TruMedia about {report['asked']} game(s); {report['with_video']} had video")
+    finish(f"asked TruMedia about {report['asked']} game(s): {report['with_video']} returned video rows, "
+           f"{report['empty']} returned nothing, {len(report['errors'])} errors")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-URL_RE = re.compile(r"^\s*https?://\S+\s*$", re.I)
+URL_RE = re.compile(r"^\s*(?:https?:)?//\S+\s*$|^\s*www\.\S+\s*$", re.I)
+
+
+def fix_url(u: str) -> str:
+    u = u.strip()
+    if u.startswith("//"):
+        return "https:" + u
+    if u.lower().startswith("www."):
+        return "https://" + u
+    return u
 VIDEO_EXT = (".csv", ".xlsx", ".xls")
 PRACTICE = re.compile(r"(?i)\b(practice|bullpen|pen|bp|batting practice|drill|cage|scrimmage live|lift|workout)\b")
 
@@ -128,7 +137,7 @@ def clip_rows(df: pd.DataFrame, names: dict):
             u = text(rec.get(c))
             if URL_RE.match(u):
                 lab = text(rec.get(cols["angle"])) if cols["angle"] and len(url_cols) == 1 else ""
-                clips.append({"l": lab or pretty(c, names), "u": u.strip()})
+                clips.append({"l": lab or pretty(c, names), "u": fix_url(u)})
         if not clips:
             continue
         f = {k: (rec.get(c) if c else None) for k, c in cols.items()}
@@ -288,6 +297,7 @@ def attach(df: pd.DataFrame, root: Path, out_dir: Path, bc_code: str, parse_file
     tm_dir = out_dir / "video-tm"
     if tm_dir.exists() and cfg.get("trumedia", {}).get("enabled", True):
         srep = {"file": "TruMedia GameVideo", "rows": 0}
+        raw_rows, raw_cols = 0, set()
         for fpath in sorted(tm_dir.glob("*.json")):
             try:
                 rec = json.loads(fpath.read_text())
@@ -296,10 +306,15 @@ def attach(df: pd.DataFrame, root: Path, out_dir: Path, bc_code: str, parse_file
             if not rec.get("rows"):
                 continue
             t = pd.DataFrame(rec["rows"])
+            raw_rows += len(t)
+            raw_cols.update(map(str, t.columns))
             for f, clips in clip_rows(t, names):
                 srep["rows"] += 1
                 take(f, clips, "TruMedia", rec["gid"], srep)
-        if srep["rows"]:
+        if raw_rows and not srep["rows"]:
+            srep["status"] = (f"TruMedia sent {raw_rows} rows but no video links were found in them "
+                              f"(columns: {', '.join(sorted(raw_cols))[:400]})")
+        if raw_rows:
             report["sources"].append(srep)
 
     # AWRE clip lists in data/video/

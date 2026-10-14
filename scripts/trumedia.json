@@ -9,6 +9,8 @@
   "filter": "(season.seasonLevel IN ('BBC','SFT') AND team.game.gameLeague = 'D1')",
   "_label_all_teams": "If TruMedia's all-D1 query leaves out teams, the pull asks for each team's roster. true = every D1 team (slower, team shown for everyone); false = Power 4 teams only.",
   "label_all_teams": true,
+  "_time_limit_minutes": "The pull stops asking TruMedia after this many minutes. Team rosters are saved between runs, so a big first pull finishes over a few runs.",
+  "time_limit_minutes": 30,
   "hitting_columns": [
     "PA",
     "AB",

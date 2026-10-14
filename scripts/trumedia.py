@@ -20,7 +20,7 @@ import re
 import sys
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -30,7 +30,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = Path(__file__).resolve().parent / "trumedia.json"
 OUT = ROOT / "site" / "data"
 API = os.environ.get("TRUMEDIA_API_BASE", "https://api.trumedianetworks.com").rstrip("/")
-TIMEOUT = 180
+TIMEOUT = 90            # seconds per request
+DEFAULT_BUDGET_MIN = 30 # whole NCAA pull stops asking TruMedia after this; what's done is kept
 
 ID_CANDIDATES = {
     "id": ["playerId", "playerID", "PlayerId", "player_id", "id"],
@@ -55,7 +56,8 @@ def norm(s: str) -> str:
 
 
 class TruMedia:
-    def __init__(self, username, sitename, master):
+    def __init__(self, username, sitename, master, budget_min: float | None = None):
+        self.deadline = time.time() + 60 * budget_min if budget_min else None
         res = requests.post(f"{API}/v1/siteadmin/api/createTempPBToken",
                             headers={"Content-Type": "application/json"},
                             data=json.dumps({"username": username, "sitename": sitename, "token": master}),
@@ -73,10 +75,17 @@ class TruMedia:
         if filters:
             q += "&filters=" + urllib.parse.quote(f"({filters})", safe="()'")
         url = f"{API}/v1/mlbapi/custom/baseball/DirectedQuery/{fmt}.csv?{q}&token={self.tok}"
-        for attempt in range(3):
-            res = requests.get(url, timeout=TIMEOUT)
-            if res.status_code in (429, 502, 503, 504) and attempt < 2:
-                time.sleep(5 * (attempt + 1))
+        for attempt in range(2):
+            if self.out_of_time():
+                raise OutOfTime()
+            try:
+                res = requests.get(url, timeout=TIMEOUT)
+            except requests.RequestException as e:
+                if attempt == 0:
+                    continue
+                raise QueryError(0, f"no answer from TruMedia ({type(e).__name__})")
+            if res.status_code in (429, 502, 503, 504) and attempt == 0:
+                time.sleep(5)
                 continue
             if res.status_code != 200:
                 raise QueryError(res.status_code, res.text[:4000])
@@ -85,6 +94,9 @@ class TruMedia:
                 return pd.DataFrame()
             return pd.read_csv(io.StringIO(text))
         raise QueryError(res.status_code, res.text[:4000])
+
+    def out_of_time(self):
+        return self.deadline is not None and time.time() > self.deadline
 
 
 def error_text(body: str) -> str:
@@ -97,8 +109,13 @@ def error_text(body: str) -> str:
 
 class QueryError(Exception):
     def __init__(self, status, body):
-        super().__init__(f"HTTP {status}: {error_text(body)}")
+        super().__init__(f"HTTP {status}: {error_text(body)}" if status else error_text(body))
         self.status = status
+
+
+class OutOfTime(QueryError):
+    def __init__(self):
+        super().__init__(0, "time limit for this run reached; the rest is picked up next run")
 
 
 def all_teams(tm: TruMedia, year: int, report: dict) -> pd.DataFrame | None:
@@ -280,40 +297,67 @@ class TeamLabeler:
     def load_members(self, key_col_name):
         if self.members is not None:
             return self.members
-        self.members = {}
         teams = self.load_teams()
+        # Rosters are saved between runs (site/data/ncaa-rosters-<year>.json, kept by the workflow
+        # cache), so each run only asks about teams it hasn't seen or whose roster is a week old.
+        cache_f = OUT / f"ncaa-rosters-{self.year}.json"
+        try:
+            cache = json.loads(cache_f.read_text()) if cache_f.exists() else {}
+        except ValueError:
+            cache = {}
+        if cache.get("key") != key_col_name:
+            cache = {}
+        seen = cache.get("teams", {})          # teamId -> date asked
+        self.members = dict(cache.get("members", {}))
         if not teams:
             return self.members
         order = sorted(teams, key=lambda t: not self.is_p4(teams[t]))
         if not self.cfg.get("label_all_teams", True):
             order = [t for t in order if self.is_p4(teams[t])]
+        stale = datetime.now(timezone.utc) - timedelta(days=7)
+        current = self.year >= datetime.now(timezone.utc).year
+        def fresh(t):
+            d = seen.get(t)
+            return bool(d) and (not current or datetime.fromisoformat(d) > stale)
+        todo = [t for t in order if not fresh(t)]
         base = {"seasonYear": self.year, "seasonType": self.cfg.get("seasonType", "REG"), "format": "RAW"}
-        done = failed = 0
-        log(f"    learning rosters for {len(order)} teams (Power 4 first)")
-        for tid in order:
-            df = None
-            for cols in (["PA", "IP"], ["PA"], ["IP"]):
-                try:
-                    df = self.tm.query("PlayerTotals", {**base, "teamId": tid}, cols)
-                    break
-                except QueryError:
+        done = failed = streak = 0
+        log(f"    rosters: {len(order) - len(todo)} of {len(order)} teams saved from earlier runs; asking about {len(todo)} (Power 4 first)")
+        try:
+            for tid in todo:
+                df = None
+                for cols in (["PA", "IP"], ["PA"], ["IP"]):
+                    try:
+                        df = self.tm.query("PlayerTotals", {**base, "teamId": tid}, cols)
+                        break
+                    except OutOfTime:
+                        raise
+                    except QueryError:
+                        continue
+                if df is None:
+                    failed += 1
+                    streak += 1
+                    if streak >= 15:
+                        log("    ! 15 roster queries in a row failed; stopping roster lookups for this run")
+                        break
                     continue
-            if df is None:
-                failed += 1
-                if failed >= 15 and done == 0:
-                    log("    ! per-team queries are failing; stopping roster lookups")
-                    break
-                continue
-            done += 1
-            kc = first_col(df, [key_col_name]) or pick(df, "id") or pick(df, "name")
-            if kc is None:
-                continue
-            for v in df[kc].tolist():
-                k = clean_id(v)
-                if k and k not in self.members:
-                    self.members[k] = tid
-        self.rep["roster_queries"] = {"teams": len(order), "ok": done, "failed": failed, "players": len(self.members)}
-        log(f"    rosters: {done} teams answered, {failed} failed, {len(self.members)} players placed")
+                done += 1
+                streak = 0
+                seen[tid] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                kc = first_col(df, [key_col_name]) or pick(df, "id") or pick(df, "name")
+                if kc is None:
+                    continue
+                for v in df[kc].tolist():
+                    k = clean_id(v)
+                    if k:
+                        self.members[k] = tid
+        except OutOfTime:
+            log("    ! time limit reached during roster lookups; the remaining teams are asked next run")
+            self.rep["time_limit_hit"] = True
+        cache_f.write_text(json.dumps({"key": key_col_name, "teams": seen, "members": self.members}, separators=(",", ":")))
+        self.rep["roster_queries"] = {"teams": len(order), "saved": len(order) - len(todo), "ok": done, "failed": failed,
+                                      "players": len(self.members)}
+        log(f"    rosters: {done} teams answered this run, {failed} failed, {len(self.members)} players placed")
         return self.members
 
     def label(self, df: pd.DataFrame, srep: dict) -> pd.DataFrame:
@@ -463,7 +507,7 @@ def main():
     if not (user and site and master):
         return finish("skipped: TruMedia secrets are not set in the repository")
     try:
-        tm = TruMedia(user, site, master)
+        tm = TruMedia(user, site, master, float(cfg.get("time_limit_minutes", DEFAULT_BUDGET_MIN)))
     except Exception as e:
         return finish(f"could not sign in to TruMedia ({str(e)[:200]})")
 
@@ -493,12 +537,19 @@ def main():
                     f"Power 4 teams matched: {srep.get('power4_teams_matched')}")
                 if srep.get("power4_teams_missing"):
                     log(f"    ! Power 4 teams not found (add aliases in trumedia.json): {srep['power4_teams_missing']}")
-            if out.get("hitting") or out.get("pitching"):
-                (OUT / f"ncaa-{year}.json").write_text(json.dumps(out, separators=(",", ":")))
+            yf = OUT / f"ncaa-{year}.json"
+            if tm.out_of_time() and yf.exists():
+                log(f"  {year}: time limit reached mid-pull; keeping the last complete {year} pull on the site")
+            elif out.get("hitting") or out.get("pitching"):
+                yf.write_text(json.dumps(out, separators=(",", ":")))
                 ok_years += 1
         except Exception as e:
             yr["error"] = str(e)[:300]
             log(f"  ! {year}: {e}")
+        if tm.out_of_time():
+            report["time_limit_hit"] = True
+            log("  ! time limit reached; earlier pulls are kept and the rest is picked up next run")
+            break
     finish(f"pulled {ok_years} of {len(cfg.get('seasons', []))} seasons" if ok_years else "no seasons pulled; see errors")
 
 
