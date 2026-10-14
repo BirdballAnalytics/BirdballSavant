@@ -32,6 +32,7 @@ TEAMS_FILE = Path(__file__).resolve().parent / "teams.json"
 ALIASES_FILE = Path(__file__).resolve().parent / "aliases.json"
 ROSTER_FILE = Path(__file__).resolve().parent / "roster.json"
 CORRECTIONS_FILE = Path(__file__).resolve().parent / "corrections.json"
+BATS_FILE = Path(__file__).resolve().parent / "bats.json"
 
 BC_CODES = {"BOC_EAG", "BOS_COL"}
 BC_CANON = "BOC_EAG"
@@ -598,6 +599,56 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------------------------------------------------------
 # Expected stats model (kernel-smoothed on exit velocity x launch angle)
 # ----------------------------------------------------------------------------
+XMOV_K = 60          # neighbours per pitch
+XMOV_MIN_TYPE = 150  # a pitch type needs this many pitches league-wide to get an expected movement
+
+
+def expected_movement(df: pd.DataFrame) -> pd.DataFrame:
+    """Expected IVB / HB for each pitch: the average movement of the same pitch type thrown by
+    OTHER pitchers with a similar arm slot (release height, release side, extension) and velocity.
+    Lefties are mirrored so both hands share one pool. Every pitcher in the data (BC and
+    opponents, all seasons) is in the pool. Results: columns xivb, xhb (inches)."""
+    df["xivb"], df["xhb"] = np.nan, np.nan
+    need = ["RelHeight", "RelSide", "Extension", "RelSpeed", "InducedVertBreak", "HorzBreak"]
+    ok = df["nt"].eq(0) & df["pt"].ne("UN") & df[need].notna().all(axis=1) & df["PitcherThrows"].isin(["Left", "Right"])
+    if not ok.any():
+        return df
+    sub = df.loc[ok, need + ["pt", "PitcherThrows", "Pitcher", "PitcherTeam"]].copy()
+    mir = np.where(sub["PitcherThrows"].eq("Left"), -1.0, 1.0)
+    sub["side"] = sub["RelSide"] * mir
+    sub["hbm"] = sub["HorzBreak"] * mir
+    sub["pid"] = pd.factorize(sub["Pitcher"].astype(str) + "|" + sub["PitcherTeam"].astype(str))[0]
+    # feature scale (how far counts as "similar"): ~0.25 ft of slot, ~0.4 ft extension, ~2 mph
+    scale = {"RelHeight": 0.25, "side": 0.25, "Extension": 0.4, "RelSpeed": 2.0}
+    done = 0
+    for pt, g in sub.groupby("pt"):
+        if len(g) < XMOV_MIN_TYPE:
+            continue
+        X = np.column_stack([g[c].to_numpy(float) / w for c, w in scale.items()])
+        pid = g["pid"].to_numpy()
+        iv, hb = g["InducedVertBreak"].to_numpy(float), g["hbm"].to_numpy(float)
+        k = min(XMOV_K, len(g) - 1)
+        out_iv, out_hb = np.empty(len(g)), np.empty(len(g))
+        for a in range(0, len(g), 800):
+            b = min(len(g), a + 800)
+            d = ((X[a:b, None, :] - X[None, :, :]) ** 2).sum(-1)
+            d[pid[a:b, None] == pid[None, :]] = np.inf          # never compare a pitcher to himself
+            kk = min(k, max(1, int(np.isfinite(d).sum(1).min())))
+            nn = np.argpartition(d, kk - 1, axis=1)[:, :kk]
+            dd = np.take_along_axis(d, nn, 1)
+            w = np.where(np.isfinite(dd), 1.0 / (1.0 + dd), 0.0)   # closer pitches count more
+            ws = w.sum(1)
+            ws[ws == 0] = np.nan
+            out_iv[a:b] = (w * iv[nn]).sum(1) / ws
+            out_hb[a:b] = (w * hb[nn]).sum(1) / ws
+        m = np.where(g["PitcherThrows"].eq("Left"), -1.0, 1.0)
+        df.loc[g.index, "xivb"] = out_iv
+        df.loc[g.index, "xhb"] = out_hb * m
+        done += len(g)
+    log(f"  expected movement fit for {done:,} pitches")
+    return df
+
+
 def fit_expected(df: pd.DataFrame) -> pd.DataFrame:
     hitvals = {"1B": (1, 1, W["1B"]), "2B": (1, 2, W["2B"]), "3B": (1, 3, W["3B"]),
                "HR": (1, 4, W["HR"])}
@@ -691,6 +742,48 @@ def ncaa_index():
     return out
 
 
+def fix_batter_sides(df: pd.DataFrame):
+    """BC hitters: bats.json first, then the roster's B/T. TrackMan operators sometimes tag the
+    wrong side, which made one-sided hitters look like switch hitters."""
+    want = {}
+    if ROSTER_FILE.exists():
+        for rp in json.loads(ROSTER_FILE.read_text()).get("players", []):
+            b = str(rp.get("bt", "")).split("/")[0].strip().upper()[:1]
+            first, _, last = rp["name"].strip().partition(" ")
+            if b in ("L", "R", "S") and last:
+                want[f"{last}, {first}"] = (b, "roster")
+    if BATS_FILE.exists():
+        for k, v in json.loads(BATS_FILE.read_text()).items():
+            if not k.startswith("_") and str(v).strip().upper()[:1] in ("L", "R", "S"):
+                want[k.strip()] = (str(v).strip().upper()[:1], "bats.json")
+    bc_names = set(df.loc[df["BatterTeam"] == BC_CANON, "Batter"].dropna())
+
+    def find(name):
+        if name in bc_names:
+            return name
+        last, _, first = name.partition(",")
+        last, first = last.strip().lower(), first.strip().lower()
+        c = [n for n in bc_names if n.split(",")[0].strip().lower() == last and
+             n.partition(",")[2].strip().lower()[:1] == first[:1]]
+        return c[0] if len(c) == 1 else None
+
+    forced, report = {}, []
+    for name, (b, src) in want.items():
+        n = find(name)
+        if not n:
+            continue
+        forced[n] = b
+        if b in ("L", "R"):
+            m = (df["Batter"] == n) & (df["BatterTeam"] == BC_CANON)
+            side = "Left" if b == "L" else "Right"
+            changed = int((m & df["BatterSide"].notna() & (df["BatterSide"] != side)).sum())
+            df.loc[m, "BatterSide"] = side
+            if changed:
+                report.append({"batter": n, "bats": b, "source": src, "pitches_fixed": changed})
+                log(f"  {n}: bats {b} ({src}); {changed} pitches were tagged from the other side")
+    return df, forced, report
+
+
 def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(s).lower()).strip("-")
 
@@ -749,6 +842,13 @@ def build():
         # results games without batted-ball tracking: keep their in-play rows out of expected stats
         untracked = df["nt"].eq(1)
         df.loc[untracked, ["xba", "xslg", "xwv"]] = np.nan
+        df = expected_movement(df)
+
+    df, forced_bats, bats_report = fix_batter_sides(df)
+
+    for c in ("xivb", "xhb"):
+        if c not in df.columns:
+            df[c] = np.nan
 
     # Players: BC players keyed by name (TrackMan IDs sometimes change between
     # seasons); opponents keyed by team + name.
@@ -791,7 +891,7 @@ def build():
         if not counts:
             return ""
         tot = sum(counts.values())
-        if switch_ok and len(counts) > 1 and min(counts.values()) >= 0.1 * tot:
+        if switch_ok and len(counts) > 1 and min(counts.values()) >= 0.2 * tot:
             return "S"
         return max(counts, key=counts.get)[0]
 
@@ -799,7 +899,7 @@ def build():
     pidx = {p["k"]: i for i, p in enumerate(plist)}
     players_out = [{
         "k": p["k"], "n": p["n"], "t": p["t"], "bc": p["bc"],
-        "th": hand(p["throws"], False), "b": hand(p["bats"], True),
+        "th": hand(p["throws"], False), "b": forced_bats.get(p["n"]) if p["bc"] and p["n"] in forced_bats else hand(p["bats"], True),
         "hit": sorted(p["hit"]), "pit": sorted(p["pit"]),
     } for p in plist]
 
@@ -889,6 +989,8 @@ def build():
             "ax": [r(x, 0) for x in sdf["SpinAxis"]],
             "ivb": [r(x, 1) for x in sdf["InducedVertBreak"]],
             "hb": [r(x, 1) for x in sdf["HorzBreak"]],
+            "xivb": [r(x, 1) for x in sdf["xivb"]],
+            "xhb": [r(x, 1) for x in sdf["xhb"]],
             "rh": [r(x, 2) for x in sdf["RelHeight"]],
             "rsd": [r(x, 2) for x in sdf["RelSide"]],
             "ext": [r(x, 2) for x in sdf["Extension"]],
@@ -938,7 +1040,7 @@ def build():
     meta = {
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seasons": seasons_meta, "files": manifest, "teams": teams,
-        "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report,
+        "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report, "bats": bats_report,
         "ncaa": ncaa_index(),
         "video": {"report": vreport, "players": vextra["players"], "other": vextra["other"]},
         "weights": W,

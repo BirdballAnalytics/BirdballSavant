@@ -1,0 +1,5 @@
+{
+  "_note": "Which side BC hitters bat from: L, R or S (switch). This wins over TrackMan's tagging and over the roster's B/T. Players not listed use the roster; anyone not on the roster uses TrackMan. For L or R hitters, every pitch they saw is set to that side, so pitch-level splits and pull/oppo use the right side too.",
+  "Mainolfi, Ty": "L",
+  "Malaret, Gabe": "R"
+}
