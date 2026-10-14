@@ -218,6 +218,23 @@ function pitchShape(rows) {
     ext: mean(rows.map(r => r.ext).filter(x => x != null)),
   };
 }
+// Expected movement (from the build): what this pitch type usually does for pitchers with the same
+// arm slot and velocity. dIVB > 0 = more carry / less drop than expected; dHB is in arm-side terms
+// (> 0 = more arm-side run, < 0 = more glove-side sweep), so it reads the same for lefties and righties.
+function xMove(a) {
+  const ok = a.filter(r => r.xivb != null && r.xhb != null && r.ivb != null && r.hb != null);
+  if (!ok.length) return { xivb: null, xhb: null, divb: null, dhb: null };
+  const arm = r => (r.th === 'L' ? -1 : 1);
+  return {
+    xivb: mean(ok.map(r => r.xivb)), xhb: mean(ok.map(r => r.xhb)),
+    divb: mean(ok.map(r => r.ivb - r.xivb)), dhb: mean(ok.map(r => (r.hb - r.xhb) * arm(r))),
+  };
+}
+const fmtD = v => (v == null ? '—' : (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1));
+const XMOV_COLS = [
+  { k: 'divb', label: 'IVB vs x', fmt: fmtD, tip: 'Induced vertical break compared with what the same pitch type does for pitchers with this arm slot and velocity. + = more carry (or less drop) than expected, in inches.' },
+  { k: 'dhb', label: 'HB vs x', fmt: fmtD, tip: 'Horizontal break compared with what is expected for this arm slot and velocity, in arm-side terms. + = more arm-side run, − = more glove-side sweep, in inches.' },
+];
 function arsenal(rows) {
   const total = rows.length, by = {};
   for (const r of rows) (by[r.pt] = by[r.pt] || []).push(r);
@@ -230,6 +247,7 @@ function arsenal(rows) {
       useR: vsR ? a.filter(r => r.bs === 'R').length / vsR : null, useL: vsL ? a.filter(r => r.bs === 'L').length / vsL : null,
       v: mean(nn(r => r.v)), vmax: nn(r => r.v).length ? Math.max(...nn(r => r.v)) : null, spin: mean(nn(r => r.spin)),
       ivb: mean(nn(r => r.ivb)), hb: mean(nn(r => r.hb)), vaa: mean(nn(r => r.vaa)), ext: mean(nn(r => r.ext)),
+      ...xMove(a),
       rh: mean(nn(r => r.rh)), rs: mean(nn(r => r.rsd)), axis: mean(nn(r => r.ax)),
       whiff: st.whiff, csw: st.csw, chase: st.chase, zone: st.zone, avgEV: st.avgEV, hhPct: st.hhPct,
       xwoba: st.xwoba, woba: st.woba, xba: st.xba, ba: st.avg, PA: st.PA, K: st.K,
@@ -535,9 +553,16 @@ function movementChart(rows, active) {
   const pts = rows.filter(r => r.hb != null && r.ivb != null && active.has(r.pt));
   g += pts.map(r => `<circle cx="${X(Math.max(-R, Math.min(R, r.hb))).toFixed(1)}" cy="${Y(Math.max(-R, Math.min(R, r.ivb))).toFixed(1)}" r="2.6" fill="${PT[r.pt].c}" fill-opacity=".45"><title>${PT[r.pt].n} ${F.f1(r.v)} mph · IVB ${F.f1(r.ivb)} · HB ${F.f1(r.hb)}</title></circle>`).join('');
   const by = {}; pts.forEach(r => (by[r.pt] = by[r.pt] || []).push(r));
+  const clampR = v => Math.max(-R, Math.min(R, v));
   for (const k in by) {
-    const a = by[k], hx = mean(a.map(r => r.hb)), vy = mean(a.map(r => r.ivb));
-    g += `<circle cx="${X(hx)}" cy="${Y(vy)}" r="8" fill="${PT[k].c}" stroke="var(--surface)" stroke-width="2.5"><title>${PT[k].n} average: IVB ${F.f1(vy)}, HB ${F.f1(hx)}</title></circle>`;
+    const a = by[k], hx = mean(a.map(r => r.hb)), vy = mean(a.map(r => r.ivb)), xm = xMove(a);
+    if (xm.xivb != null) {
+      const ex = X(clampR(xm.xhb)), ey = Y(clampR(xm.xivb));
+      g += `<line x1="${ex.toFixed(1)}" y1="${ey.toFixed(1)}" x2="${X(hx).toFixed(1)}" y2="${Y(vy).toFixed(1)}" stroke="var(--surface)" stroke-width="4"/><line x1="${ex.toFixed(1)}" y1="${ey.toFixed(1)}" x2="${X(hx).toFixed(1)}" y2="${Y(vy).toFixed(1)}" stroke="${PT[k].c}" stroke-width="1.8" stroke-dasharray="3 3"/>`;
+      g += `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7" fill="var(--surface)" fill-opacity=".55" stroke="var(--surface)" stroke-width="5"/>`;
+      g += `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7" fill="none" stroke="${PT[k].c}" stroke-width="2.2" stroke-dasharray="3 2" data-tip="${esc(`<b>${esc(PT[k].n)}: expected</b><br>IVB ${F.f1(xm.xivb)} · HB ${F.f1(xm.xhb)}<br><span class='muted'>for this arm slot and velo</span>`)}"/>`;
+    }
+    g += `<circle cx="${X(hx)}" cy="${Y(vy)}" r="8" fill="${PT[k].c}" stroke="var(--surface)" stroke-width="2.5" data-tip="${esc(`<b>${esc(PT[k].n)} average</b><br>IVB ${F.f1(vy)} · HB ${F.f1(hx)}${xm.divb != null ? `<br>vs expected: IVB ${fmtD(xm.divb)} · HB ${fmtD(xm.dhb)} (arm side +)` : ''}`)}"/>`;
   }
   return svg(W, H, g, 'Pitch movement chart');
 }
@@ -977,7 +1002,7 @@ async function pageArsenal() {
   ${table('t-arsenal', [nameCol, { k: 'th', label: 'T' },
     { k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
     { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 },
-    { k: 'spin', label: 'Spin', fmt: F.int }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, { k: 'vaa', label: 'VAA', fmt: F.f1, tip: 'Vertical approach angle' },
+    { k: 'spin', label: 'Spin', fmt: F.int }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, ...XMOV_COLS, { k: 'vaa', label: 'VAA', fmt: F.f1, tip: 'Vertical approach angle' },
     { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'whiff', label: 'Whiff%', fmt: F.pct }, { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'chase', label: 'Chase%', fmt: F.pct },
     { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'putaway', label: 'PutAway%', fmt: F.pct, tip: 'Strikeouts per two-strike pitch' }, { k: 'avgEV', label: 'EV', fmt: F.f1 }, { k: 'xwoba', label: 'xwOBA', fmt: F.avg }],
     rows, { sort: 'n' })}
@@ -1336,14 +1361,14 @@ function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
     <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2>${poolSwitch(hasNcaa)}</div>
       <p class="muted small" style="margin:-4px 0 10px">${esc(se.label)} · ${poolNote(alt, T, pool, 'BF', meRow)}</p>
       ${pctBars(PIT_PCT, meRow, pool, alt)}</div>
-    <div class="panel"><div class="panel-h"><h2>Movement profile</h2><span class="note">${F.int(tot)} pitches · large dots = averages</span></div>
+    <div class="panel"><div class="panel-h"><h2>Movement profile</h2><span class="note">${F.int(tot)} pitches · large dots = averages · dashed rings = expected for his arm slot &amp; velo</span></div>
       <div class="chart-box" id="mvbox">${movementChart(rows, ui.active)}</div>
       ${ptChips('pt-chips', types, ui.active, () => redrawPitcherCharts(rows, ui))}</div>
   </section>
   <section><div class="panel-h"><h2>Pitch arsenal</h2><span class="note">${esc(se.label)}</span></div>
     ${table('t-pp-ars', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
       { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'useR', label: 'vs RHH%', fmt: F.pct }, { k: 'useL', label: 'vs LHH%', fmt: F.pct },
-      { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 },
+      { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, ...XMOV_COLS,
       { k: 'vaa', label: 'VAA', fmt: F.f1 }, { k: 'rh', label: 'Rel Ht', fmt: F.f1 }, { k: 'ext', label: 'Ext', fmt: F.f1 },
       { k: 'whiff', label: 'Whiff%', fmt: F.pct }, { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'chase', label: 'Chase%', fmt: F.pct }, { k: 'zone', label: 'Zone%', fmt: F.pct },
       { k: 'putaway', label: 'PutAway%', fmt: F.pct }, { k: 'PA', label: 'PA', fmt: F.int }, { k: 'ba', label: 'BA', fmt: F.avg }, { k: 'xba', label: 'xBA', fmt: F.avg }, { k: 'avgEV', label: 'EV', fmt: F.f1 }, { k: 'xwoba', label: 'xwOBA', fmt: F.avg }],
@@ -1604,7 +1629,7 @@ async function pagePlayerGame(sid, gi, role, key) {
     const ars = arsenal(rows);
     extra = `<section><div class="panel-h"><h2>Pitch mix</h2></div>${table('t-pg-ars', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
       { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int },
-      { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'whiff', label: 'Whiff%', fmt: F.pct },
+      { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, ...XMOV_COLS, { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'whiff', label: 'Whiff%', fmt: F.pct },
       { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'avgEV', label: 'EV', fmt: F.f1 }], ars, { sort: 'n' })}</section>
       <section class="grid2">
         <div class="panel"><div class="panel-h"><h2>Pitch locations</h2><span class="note">Pitcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
@@ -1725,6 +1750,7 @@ function pageGlossary() {
     ['CSW %', 'Called strikes plus swinging strikes ÷ pitches.'],
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
+    ['Expected movement (IVB vs x, HB vs x)', 'What a pitch type usually does for pitchers with the same arm slot (release height, release side and extension) and velocity. Each pitch is compared with the 60 most similar pitches of the same type thrown by other pitchers in this site\'s data (BC and opponents, all seasons), with lefties mirrored so both hands share one pool. IVB vs x: + means more carry or less drop than expected. HB vs x is in arm-side terms: + means more arm-side run, − means more glove-side sweep. On the movement chart, dashed rings show the expected spot and a dashed line runs to the actual average.'],
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
     ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify with 5 or more plate appearances and pitchers with 5 or more batters faced. Non-qualified players are shown faded against the same pool.'],
     ['IP and R', 'Innings pitched and runs come from TrackMan outs-on-play and runs-scored tagging. They are close to the official box score but are not official, and runs are not split into earned and unearned.'],
