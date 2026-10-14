@@ -11,6 +11,11 @@ on:
       - "scripts/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
+    inputs:
+      pull_ncaa:
+        description: "Also refresh TruMedia NCAA stats (slower; it runs every Monday anyway)"
+        type: boolean
+        default: false
   schedule:
     - cron: "17 9 * * 1"   # every Monday morning: refresh TruMedia data
 
@@ -26,6 +31,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,7 +54,8 @@ jobs:
           restore-keys: trumedia-
 
       - name: Pull TruMedia NCAA data
-        if: github.event_name != 'push' || contains(github.event.head_commit.modified, 'scripts/trumedia.json') || contains(github.event.head_commit.added, 'scripts/trumedia.json')
+        if: github.event_name == 'schedule' || inputs.pull_ncaa || contains(github.event.head_commit.modified, 'scripts/trumedia.json') || contains(github.event.head_commit.added, 'scripts/trumedia.json')
+        timeout-minutes: 40
         continue-on-error: true
         env:
           TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
@@ -72,6 +79,7 @@ jobs:
           restore-keys: video-
 
       - name: Pull AWRE game video links from TruMedia
+        timeout-minutes: 15
         continue-on-error: true
         env:
           TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
