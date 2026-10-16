@@ -100,7 +100,8 @@
       "chase": "Chase%",
       "whiff": "Whiff%",
       "kPct": "K%",
-      "bbPct": "BB%"
+      "bbPct": "BB%",
+      "hitPlus": "Hit+"
     },
     "pitching": {
       "xwoba": "xwOBA|PIT",
@@ -269,5 +270,58 @@
     "Wake Forest": [
       "Wake"
     ]
+  },
+  "_hitplus": "Hit+ (Baseball America): contact %, EV90, chase %, barrel % and xwOBA on contact, split by fastballs / breaking / offspeed, scaled so the average D1 hitter in this pull = 100 and 10 points = 1 SD. 'columns' lists TruMedia column names to try for each input (first one TruMedia accepts is used; check the Data status page). 'pitch_groups' lists TruMedia filters to try for each pitch type; if none work, Hit+ uses all pitches together.",
+  "hitplus": {
+    "enabled": true,
+    "columns": {
+      "contact": [
+        "Contact%"
+      ],
+      "chase": [
+        "Chase%"
+      ],
+      "barrel": [
+        "Barrel%"
+      ],
+      "ev90": [
+        "EV90",
+        "ExitVel90",
+        "90thExitVel",
+        "ExitVelo90",
+        "ExitVel90th",
+        "HardHit%"
+      ],
+      "xwobacon": [
+        "xwOBAcon",
+        "xwOBACON",
+        "xwOBACon",
+        "xwOBAOnContact"
+      ]
+    },
+    "pitch_groups": {
+      "FB": [
+        "pitch.pitchTypeGroup = 'FB'",
+        "event.pitchTypeGroup = 'FB'",
+        "pitch.pitchTypeGroup = 'Fastball'",
+        "pitch.pitchType IN ('FA','FF','FT','SI','FC')",
+        "event.pitchType IN ('FA','FF','FT','SI','FC')"
+      ],
+      "BR": [
+        "pitch.pitchTypeGroup = 'BR'",
+        "event.pitchTypeGroup = 'BR'",
+        "pitch.pitchTypeGroup = 'Breaking'",
+        "pitch.pitchType IN ('SL','CU','KC','CS','SV','ST')",
+        "event.pitchType IN ('SL','CU','KC','CS','SV','ST')"
+      ],
+      "OS": [
+        "pitch.pitchTypeGroup = 'OS'",
+        "event.pitchTypeGroup = 'OS'",
+        "pitch.pitchTypeGroup = 'Offspeed'",
+        "pitch.pitchType IN ('CH','FS','FO','SC','KN')",
+        "event.pitchType IN ('CH','FS','FO','SC','KN')"
+      ]
+    },
+    "k": {}
   }
 }
