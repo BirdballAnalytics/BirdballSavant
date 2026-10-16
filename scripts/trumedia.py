@@ -622,13 +622,26 @@ def hp_fetch(tm, year, cfg, rep, p4, chosen_name, raw_hit, ck):
         ck.unit("hp-ALL", lambda: {"filter": "all pitches", "df": run_all(cols)}, kind="df")
 
 
+def hp_inputs_from(raw_hit, hcfg):
+    """Pick Hit+ input columns from what the regular hitting pull already has."""
+    inputs = {}
+    for m, cands in hcfg.get("columns", {}).items():
+        c = next((c for c in cands if c in raw_hit.columns), None)
+        if c:
+            inputs[m] = c
+    if "ev90" not in inputs:
+        c = next((c for c in ("HardHit%", "MaxExitVel", "ExitVel") if c in raw_hit.columns), None)
+        if c:
+            inputs["ev90"] = c
+    if "xwobacon" not in inputs:
+        inputs["xwobacon"] = "derived from xwOBA"
+    return inputs
+
+
 def hp_build(cfg, rep, raw_hit, ck):
     """Offline part of Hit+: scale + scores from whatever the fetch steps have saved."""
     hcfg = cfg.get("hitplus", {})
     if not hcfg.get("enabled", True) or raw_hit is None or raw_hit.empty:
-        return None
-    inputs = ck.latest("hp-inputs")
-    if not inputs:
         return None
     idc = pick(raw_hit, "id") or pick(raw_hit, "name")
     if not idc or "PA" not in raw_hit or "wOBA" not in raw_hit:
@@ -637,15 +650,26 @@ def hp_build(cfg, rep, raw_hit, ck):
     overall = pd.DataFrame({"PA": pd.to_numeric(raw_hit["PA"], errors="coerce").to_numpy(),
                             "wOBA": to_num(raw_hit["wOBA"]).to_numpy()},
                            index=raw_hit[idc].map(clean_id)).groupby(level=0).first()
+    inputs = ck.latest("hp-inputs")
     frames = {g: ck.latest(f"hp-{g}", kind="df") for g in hitplus.GROUPS}
-    if all(v and v["df"] is not None for v in frames.values()):
+    a = ck.latest("hp-ALL", kind="df")
+    if inputs and all(v and v["df"] is not None for v in frames.values()):
         groups, kmult = {g: hp_metrics_frame(v["df"], inputs) for g, v in frames.items()}, 1.0
         rep["pitch_group_filters"] = {g: v["filter"] for g, v in frames.items()}
-    else:
-        a = ck.latest("hp-ALL", kind="df")
-        if not a or a["df"] is None:
-            return None
+        rep["source"] = "pitch-type splits"
+    elif inputs and a and a["df"] is not None:
         groups, kmult = {"ALL": hp_metrics_frame(a["df"], inputs)}, 2.0
+        rep["source"] = "all pitches (TruMedia pitch-type filters not accepted)"
+    else:
+        # Pitch-type pulls not finished (or not available): use the season totals already pulled,
+        # so Hit+ is on the site right away. It switches to the pitch-type version once those finish.
+        inputs = hp_inputs_from(raw_hit, hcfg)
+        missing = [m for m in ("contact", "chase", "barrel", "ev90") if m not in inputs]
+        if len(missing) > 1:
+            rep["error"] = f"the hitting pull has no column for: {', '.join(missing)}"
+            return None
+        groups, kmult = {"ALL": hp_metrics_frame(raw_hit, inputs)}, 2.0
+        rep["source"] = "season totals (pitch-type version still being pulled)" if hcfg.get("pitch_groups") else "season totals"
     scale, scores = hitplus.build(groups, overall, cfg.get("qualify", {}).get("hitting_PA", 100), kmult, hcfg.get("k"))
     if scale is None:
         rep["error"] = "not enough data to build Hit+"
@@ -819,7 +843,14 @@ def main():
     fp = cfg_fingerprint(cfg)
     cks = {y: Checkpoint(y, cfg, fp, mode) for y in cfg.get("seasons", [])}
     todo = [y for y, ck in cks.items() if ck.why]
+    p4 = p4_lookup(cfg)
     for y, ck in cks.items():
+        if y not in todo and ck.latest("hitting", kind="df") is not None:
+            try:   # rebuild from saved data (no TruMedia calls) so site/code changes show up right away
+                publish(y, cfg, p4, ck, ck.prog.setdefault("report", {}))
+                ck.save()
+            except Exception as e:
+                log(f"  ! {y}: could not rebuild from saved data ({e})")
         report["years"][str(y)] = {**ck.prog.get("report", {}), "state": "complete" if ck.prog.get("complete") else "in progress",
                                    "steps_done": sorted(ck.prog.get("done", {}))}
     if not todo:
@@ -835,7 +866,6 @@ def main():
     except Exception as e:
         return finish(f"could not sign in to TruMedia ({str(e)[:200]})")
 
-    p4 = p4_lookup(cfg)
     finished = []
     for year in todo:
         ck = cks[year]
