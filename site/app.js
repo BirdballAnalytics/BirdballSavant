@@ -272,13 +272,14 @@ function hpInputs(rows, scale) {
     const sw = a.filter(r => r.sw), oz = a.filter(r => r.iz === false);
     const bbe = a.filter(r => r.c === 'X' && r.ev != null && r.ht !== 'BU');
     const evs = bbe.map(r => r.ev);
-    const hh = (scale.inputs?.ev90 || '').includes('%');
+    const evIn = scale.inputs?.ev90 || '', hh = evIn.includes('%');
+    const evStat = v => (hh ? v.filter(x => x >= 95).length / v.length : /^MaxExitVel/i.test(evIn) ? Math.max(...v) : /^ExitVel$/i.test(evIn) ? mean(v) : quantile(v, 0.9));
     out[g] = {
       n: a.filter(r => r.r).length,
       contact: sw.length ? 1 - sw.filter(r => r.wh).length / sw.length : null,
       chase: oz.length ? oz.filter(r => r.sw).length / oz.length : null,
       barrel: bbe.length ? bbe.filter(r => isBarrel(r.ev, r.la)).length / bbe.length : null,
-      ev90: evs.length ? (hh ? evs.filter(v => v >= 95).length / evs.length : quantile(evs, 0.9)) : null,
+      ev90: evs.length ? evStat(evs) : null,
       xwobacon: bbe.filter(r => r.xw != null).length ? mean(bbe.filter(r => r.xw != null).map(r => r.xw)) : null,
     };
   }
@@ -1885,7 +1886,7 @@ function pageData() {
       } }], m.files, { nosort: true })}</section>
   ${m.ncaa?.report ? `<section class="panel"><div class="panel-h"><h2>TruMedia</h2><span class="note">Last run ${esc(new Date(m.ncaa.report.ran).toLocaleString())}</span></div>
     <p style="margin:0 0 10px"><b>${esc(m.ncaa.report.status)}</b></p>
-    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>${r.state ? ` <span class="muted">(${esc(r.state)}${r.state !== 'complete' && (r.steps_done || []).length ? ': ' + esc(r.steps_done.join(', ')) + ' done' : ''})</span>` : ''}: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${r[sd].team_source ? ` · teams from ${esc(r[sd].team_source)}${r[sd].players_with_team != null ? ` (${F.int(r[sd].players_with_team)} placed)` : ''}` : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}${r.hitplus ? `<br>Hit+: ${r.hitplus.error ? `<span class="err" style="padding:0">${esc(r.hitplus.error)}</span>` : `${F.int(r.hitplus.players || 0)} hitters · ${esc((r.hitplus.groups || []).join(', ') === 'ALL' ? 'all pitches (TruMedia pitch-type filters not accepted)' : 'by pitch type: ' + (r.hitplus.groups || []).join(', '))} · inputs: ${esc(Object.entries(r.hitplus.inputs || {}).map(([k, v]) => k + ' = ' + v).join(', '))}`}` : ''}</p>`).join('')}
+    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>${r.state ? ` <span class="muted">(${esc(r.state)}${r.state !== 'complete' && (r.steps_done || []).length ? ': ' + esc(r.steps_done.join(', ')) + ' done' : ''})</span>` : ''}: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${r[sd].team_source ? ` · teams from ${esc(r[sd].team_source)}${r[sd].players_with_team != null ? ` (${F.int(r[sd].players_with_team)} placed)` : ''}` : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}${r.hitplus ? `<br>Hit+: ${r.hitplus.error ? `<span class="err" style="padding:0">${esc(r.hitplus.error)}</span>` : `${F.int(r.hitplus.players || 0)} hitters · ${esc(r.hitplus.source || ((r.hitplus.groups || []).join(', ') === 'ALL' ? 'all pitches' : 'by pitch type: ' + (r.hitplus.groups || []).join(', ')))} · inputs: ${esc(Object.entries(r.hitplus.inputs || {}).map(([k, v]) => k + ' = ' + v).join(', '))}`}` : ''}</p>`).join('')}
   </section>` : ''}
   ${videoStatus(m.video)}
   ${(m.corrections || []).length ? `<section class="panel"><div class="panel-h"><h2>TrackMan corrections</h2><span class="note">From scripts/corrections.json</span></div>
