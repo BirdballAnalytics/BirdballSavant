@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+
+import pandas as pd
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -35,14 +37,33 @@ def safe(gid: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", gid)
 
 
-def bc_games() -> list[str]:
+def bc_games(spring_only=True) -> list[str]:
+    """BC TrackMan games, newest first. TruMedia's game video covers official NCAA games, so by
+    default fall games (Aug-Dec) and private scrimmages are skipped."""
     df, *_ = build.load_all()
     if df.empty:
         return []
     bc = df["PitcherTeam"].isin(build.BC_CODES) | df["BatterTeam"].isin(build.BC_CODES)
-    g = df.loc[bc, ["GameID", "Date"]].dropna(subset=["GameID"]).drop_duplicates("GameID")
-    g = g.sort_values("Date", ascending=False)       # newest games first
+    g = df.loc[bc, ["GameID", "Date"]].dropna(subset=["GameID"]).drop_duplicates("GameID").copy()
+    g["d"] = pd.to_datetime(g["GameID"].astype(str).str[:8], format="%Y%m%d", errors="coerce")
+    g["d"] = g["d"].fillna(pd.to_datetime(g["Date"], errors="coerce", format="mixed"))
+    if spring_only:
+        g = g[g["d"].dt.month.between(1, 7) & ~g["GameID"].astype(str).str.contains("Private", case=False)]
+    g = g.sort_values("d", ascending=False)
     return [str(x) for x in g["GameID"] if str(x).strip()]
+
+
+# TruMedia's documented call is GameVideo.csv?trackmanGameID=<id>. If TruMedia rejects it
+# ("Failed Requirement Group" = a required parameter is missing), these variants are tried
+# once on one game and the first one TruMedia accepts is used for the rest.
+def variants(gid):
+    yr = gid[:4] if gid[:4].isdigit() else None
+    out = [{"trackmanGameID": gid}, {"trackmanGameId": gid}]
+    if yr:
+        out += [{"trackmanGameID": gid, "seasonYear": yr},
+                {"trackmanGameID": gid, "seasonYear": yr, "seasonType": "REG"},
+                {"trackmanGameID": gid, "seasonYear": yr, "seasonType": "REG", "format": "RAW"}]
+    return out
 
 
 def main():
@@ -67,7 +88,7 @@ def main():
     if not (user and site and master):
         return finish("skipped: TruMedia secrets are not set in the repository")
 
-    games = bc_games()
+    games = bc_games(tcfg.get("spring_only", True))
     report["games_known"] = len(games)
     manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"   # Run workflow button: ask again now
     now = datetime.now(timezone.utc)
@@ -90,15 +111,37 @@ def main():
         return finish(f"up to date ({len(games)} BC games checked earlier)")
 
     try:
-        tm = trumedia.TruMedia(user, site, master, float(tcfg.get("time_limit_minutes", 10)))
+        tm = trumedia.TruMedia(user, site, master, float(tcfg.get("time_limit_minutes", 10)), 1.5)
     except Exception as e:
         return finish(f"could not sign in to TruMedia ({str(e)[:200]})")
+
+    # find a form of the request TruMedia accepts, using the newest game
+    probe, chosen, attempts = todo[0], None, []
+    for k, v in enumerate(variants(probe)):
+        try:
+            tm.query("GameVideo", v)
+            chosen = k
+            break
+        except trumedia.OutOfTime as e:
+            report["attempts"] = attempts
+            return finish(f"stopped before finishing: {e}")
+        except Exception as e:
+            attempts.append(f"{', '.join(v)}: {str(e)[:160]}")
+            log(f"  GameVideo with {', '.join(v)}: {str(e)[:160]}")
+    report["attempts"] = attempts
+    if chosen is None:
+        report["probe_game"] = probe
+        return finish(f"TruMedia rejected every form of the GameVideo request for {probe}. "
+                      "Ask ncaasupport@trumedianetworks.com which parameters GameVideo needs and whether "
+                      "video is included in BC's API access (send them this error).")
+    report["request"] = ", ".join(variants(probe)[chosen])
+    log(f"  using GameVideo with {report['request']}")
 
     cols_seen = set()
     for gid in todo:
         rec = {"gid": gid, "pulled": now.isoformat(timespec="seconds"), "columns": [], "rows": []}
         try:
-            df = tm.query("GameVideo", {"trackmanGameID": gid})
+            df = tm.query("GameVideo", variants(gid)[chosen])
             df = df.where(df.notna(), None)
             rec["columns"] = [str(c) for c in df.columns]
             rec["rows"] = df.to_dict(orient="records")
@@ -109,9 +152,9 @@ def main():
                 report["sample"] = {"gid": gid, "columns": rec["columns"],
                                     "rows": [{k: str(v)[:160] for k, v in r.items()} for r in rec["rows"][:3]]}
             log(f"  {gid}: {len(rec['rows'])} rows" + (f"; columns: {rec['columns']}" if rec["rows"] and report["with_video"] == 1 else ""))
-        except trumedia.OutOfTime:
+        except trumedia.OutOfTime as e:
             report["time_limit_hit"] = True
-            log("  ! time limit reached; the remaining games are asked next run")
+            log(f"  ! {e}")
             break
         except Exception as e:
             rec["error"] = str(e)[:300]

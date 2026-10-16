@@ -60,8 +60,9 @@ def norm(s: str) -> str:
 
 
 class TruMedia:
-    def __init__(self, username, sitename, master, budget_min: float | None = None):
+    def __init__(self, username, sitename, master, budget_min: float | None = None, delay: float = 1.0):
         self.deadline = time.time() + 60 * budget_min if budget_min else None
+        self.delay, self.last = delay, 0.0   # pause between requests so TruMedia doesn't rate-limit us
         res = requests.post(f"{API}/v1/siteadmin/api/createTempPBToken",
                             headers={"Content-Type": "application/json"},
                             data=json.dumps({"username": username, "sitename": sitename, "token": master}),
@@ -79,16 +80,33 @@ class TruMedia:
         if filters:
             q += "&filters=" + urllib.parse.quote(f"({filters})", safe="()'")
         url = f"{API}/v1/mlbapi/custom/baseball/DirectedQuery/{fmt}.csv?{q}&token={self.tok}"
-        for attempt in range(2):
+        waits = [20, 45, 90]      # back-off after "429 Too Many Requests"
+        for attempt in range(len(waits) + 1):
             if self.out_of_time():
                 raise OutOfTime()
+            gap = self.delay - (time.time() - self.last)
+            if gap > 0:
+                time.sleep(gap)
+            self.last = time.time()
             try:
                 res = requests.get(url, timeout=TIMEOUT)
             except requests.RequestException as e:
                 if attempt == 0:
                     continue
                 raise QueryError(0, f"no answer from TruMedia ({type(e).__name__})")
-            if res.status_code in (429, 502, 503, 504) and attempt == 0:
+            if res.status_code == 429:
+                if attempt == len(waits):
+                    raise RateLimited()
+                try:
+                    wait = min(300, float(res.headers.get("Retry-After", "")))
+                except (TypeError, ValueError):
+                    wait = waits[attempt]
+                if self.deadline is not None and time.time() + wait > self.deadline:
+                    raise RateLimited()
+                log(f"    TruMedia says too many requests; waiting {wait:.0f}s")
+                time.sleep(wait)
+                continue
+            if res.status_code in (502, 503, 504) and attempt == 0:
                 time.sleep(5)
                 continue
             if res.status_code != 200:
@@ -118,8 +136,19 @@ class QueryError(Exception):
 
 
 class OutOfTime(QueryError):
+    def __init__(self, msg="time limit for this run reached; the rest is picked up next run"):
+        super().__init__(0, msg)
+
+
+class RateLimited(OutOfTime):
+    """TruMedia kept answering 429. Treated like the time limit: stop, keep what we have, resume next build."""
     def __init__(self):
-        super().__init__(0, "time limit for this run reached; the rest is picked up next run")
+        super().__init__("TruMedia is limiting how many requests BC's account can make (429 Too Many Requests); "
+                         "stopped for now, the next build continues")
+
+
+class PullFailed(QueryError):
+    """A step got no data. It is not marked done, so the next build tries it again."""
 
 
 def all_teams(tm: TruMedia | None, year: int, report: dict) -> pd.DataFrame | None:
@@ -710,6 +739,11 @@ class Checkpoint:
         current = year >= now.year - (1 if now.month < 2 else 0)
         days = float(cfg.get("refresh_days", 5) if current else cfg.get("refresh_days_past_seasons", 30))
         done_at = self.prog.get("complete")
+        h = self.latest("hitting", kind="df") if done_at else None
+        if done_at and (h is None or getattr(h, "empty", True)):
+            done_at = self.prog["complete"] = None
+            for k in [k for k in self.prog.get("done", {}) if k in ("hitting", "pitching")]:
+                self.prog["done"].pop(k)
         if self.prog.get("cfg") != cfg_hash:
             self.why = "settings changed" if self.prog else "first pull"
             self.new_cycle(cfg_hash)
@@ -777,9 +811,13 @@ class Checkpoint:
         return {**meta, "df": df} if meta else df
 
 
+PULL_VERSION = 2   # bump to force a fresh pull after a fix
+
+
 def cfg_fingerprint(cfg):
     import hashlib
     keep = {k: v for k, v in cfg.items() if not k.startswith("_") and "time_limit" not in k and "refresh_days" not in k}
+    keep["__version"] = PULL_VERSION
     return hashlib.sha1(json.dumps(keep, sort_keys=True).encode()).hexdigest()[:12]
 
 
@@ -845,7 +883,8 @@ def main():
     todo = [y for y, ck in cks.items() if ck.why]
     p4 = p4_lookup(cfg)
     for y, ck in cks.items():
-        if y not in todo and ck.latest("hitting", kind="df") is not None:
+        saved = ck.latest("hitting", kind="df")
+        if y not in todo and saved is not None and not saved.empty:
             try:   # rebuild from saved data (no TruMedia calls) so site/code changes show up right away
                 publish(y, cfg, p4, ck, ck.prog.setdefault("report", {}))
                 ck.save()
@@ -862,7 +901,7 @@ def main():
     budget = float(cfg.get("time_limit_minutes", DEFAULT_BUDGET_MIN) if mode == "refresh"
                    else cfg.get("resume_time_limit_minutes", 20))
     try:
-        tm = TruMedia(user, site, master, budget)
+        tm = TruMedia(user, site, master, budget, float(cfg.get("request_delay_seconds", 1.5)))
     except Exception as e:
         return finish(f"could not sign in to TruMedia ({str(e)[:200]})")
 
@@ -882,7 +921,11 @@ def main():
                     df = pull_side(tm, year, cfg, side, srep, strats, chosen)
                     if chosen.get("s") is not None:
                         ck.prog["chosen"] = chosen["s"].name
-                    return df if df is not None else pd.DataFrame()
+                    if df is None or df.empty:
+                        if any("429" in a for a in srep.get("attempts", [])):
+                            raise RateLimited()
+                        raise PullFailed(0, f"{side}: TruMedia returned nothing ({' | '.join(srep.get('attempts', [])[-3:])})")
+                    return df
                 ck.unit(side, pull, kind="df")
                 publish(year, cfg, p4, ck, yr)
             if not ck.done("rosters"):
@@ -901,15 +944,19 @@ def main():
                 log(f"  {year} Hit+: pulling")
                 hp_fetch(tm, year, cfg, yr.setdefault("hitplus", {}), p4, chosen["s"].name, raw_hit, ck)
             ck.prog["complete"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            yr.pop("error", None)
             ck.save()
             publish(year, cfg, p4, ck, yr)
             finished.append(year)
             log(f"  {year}: complete")
-        except OutOfTime:
+        except OutOfTime as e:
             report["time_limit_hit"] = True
+            if isinstance(e, RateLimited):
+                report["rate_limited"] = True
+                yr["error"] = str(e)
             publish(year, cfg, p4, ck, yr)
             ck.save()
-            log(f"  ! time limit reached during {year}; everything pulled so far is on the site and the next run picks up from here")
+            log(f"  ! {e} ({year}); everything pulled so far is on the site and the next build picks up from here")
             break
         except Exception as e:
             yr["error"] = str(e)[:300]

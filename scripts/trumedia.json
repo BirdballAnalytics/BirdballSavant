@@ -15,6 +15,8 @@
   "resume_time_limit_minutes": 20,
   "refresh_days": 5,
   "refresh_days_past_seasons": 30,
+  "_request_delay_seconds": "Pause between TruMedia requests. If the Data status page shows '429 Too Many Requests', raise this.",
+  "request_delay_seconds": 1.5,
   "hitting_columns": [
     "PA",
     "AB",
