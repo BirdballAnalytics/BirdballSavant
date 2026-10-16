@@ -104,6 +104,7 @@ async function loadSeason(id) {
   }
   const se = { id, label: j.label, games: j.games, rows, byP, byH, cache: {}, clips: j.clips || [] };
   S.seasons[id] = se;
+  await prepHitPlus(se);
   return se;
 }
 const seasonLabel = id => S.meta.seasons.find(s => s.id === id)?.label || id;
@@ -257,13 +258,95 @@ function arsenal(rows) {
 }
 
 /* Season tables of BC hitters / pitchers, with qualification thresholds. */
+/* ---------- Hit+ (Baseball America), scaled to the TruMedia D1 pool ---------- */
+// The scale (means, SDs, weights) is built from every D1 hitter by scripts/trumedia.py + hitplus.py.
+// BC hitters TruMedia has (spring) use TruMedia's own number; everyone else (fall, or not in
+// TruMedia) is scored from TrackMan with the same scale, after a calibration step that lines up
+// TrackMan's inputs with TruMedia's using BC hitters who appear in both.
+const HP_GROUPS = { FB: ['FF', 'SI', 'FC'], BR: ['SL', 'ST', 'CU', 'KN'], OS: ['CH', 'FS'] };
+const normName = n => { const m = String(n).match(/^([^,]+),\s*(.+)$/); return (m ? `${m[2]} ${m[1]}` : String(n)).toLowerCase().replace(/[^a-z]/g, ''); };
+function hpInputs(rows, scale) {
+  const out = {};
+  for (const g of scale.groups) {
+    const a = rows.filter(r => !r.nt && (g === 'ALL' || (HP_GROUPS[g] || []).includes(r.pt)));
+    const sw = a.filter(r => r.sw), oz = a.filter(r => r.iz === false);
+    const bbe = a.filter(r => r.c === 'X' && r.ev != null && r.ht !== 'BU');
+    const evs = bbe.map(r => r.ev);
+    const hh = (scale.inputs?.ev90 || '').includes('%');
+    out[g] = {
+      n: a.filter(r => r.r).length,
+      contact: sw.length ? 1 - sw.filter(r => r.wh).length / sw.length : null,
+      chase: oz.length ? oz.filter(r => r.sw).length / oz.length : null,
+      barrel: bbe.length ? bbe.filter(r => isBarrel(r.ev, r.la)).length / bbe.length : null,
+      ev90: evs.length ? (hh ? evs.filter(v => v >= 95).length / evs.length : quantile(evs, 0.9)) : null,
+      xwobacon: bbe.filter(r => r.xw != null).length ? mean(bbe.filter(r => r.xw != null).map(r => r.xw)) : null,
+    };
+  }
+  return out;
+}
+function hpScore(mg, scale, calib) {
+  const gs = {};
+  for (const g of scale.groups) {
+    const per = scale.per[g] || {}, m = mg[g] || {}; let zs = 0, ws = 0;
+    for (const d of scale.metrics) {
+      const p = per[d.k]; if (!p) continue;
+      let x = m[d.k]; const n = m.n || 0;
+      if (x == null) x = p.mean; else if (calib?.[g]?.[d.k] != null) x += calib[g][d.k];
+      const xr = (n * x + d.kreg * p.mean) / (n + d.kreg);
+      zs += p.w * d.dir * (xr - p.mean) / p.sd; ws += p.w;
+    }
+    if (ws) gs[g] = 100 + 10 * (zs / ws - scale.comp[g].mean) / scale.comp[g].sd;
+  }
+  const v = Object.values(gs); if (!v.length) return null;
+  return { hit: 100 + 10 * (mean(v) - scale.final.mean) / scale.final.sd, groups: gs };
+}
+// average gap between TruMedia's inputs and TrackMan's for BC hitters in both (spring of that year)
+function hpCalibration(scale, spring) {
+  if (!spring || !scale.bc) return null;
+  const byName = new Map();
+  for (const [i] of spring.byH) if (S.players[i].bc) byName.set(normName(S.players[i].n), i);
+  const acc = {};
+  for (const [tmName, groups] of Object.entries(scale.bc)) {
+    const i = byName.get(normName(tmName)); if (i == null) continue;
+    const mine = hpInputs(spring.byH.get(i), scale);
+    for (const g of scale.groups) for (const d of scale.metrics) {
+      const a = groups[g]?.[d.k], b = mine[g]?.[d.k], n = Math.min(groups[g]?.n || 0, mine[g]?.n || 0);
+      if (a == null || b == null || !n) continue;
+      const o = ((acc[g] = acc[g] || {})[d.k] = acc[g][d.k] || { s: 0, n: 0, p: 0 }); o.s += n * (a - b); o.n += n; o.p++;
+    }
+  }
+  const out = {};
+  for (const g in acc) for (const k in acc[g]) if (acc[g][k].p >= 5) (out[g] = out[g] || {})[k] = acc[g][k].s / acc[g][k].n;
+  return Object.keys(out).length ? out : null;
+}
+async function prepHitPlus(se) {
+  se.hitPlus = new Map();
+  try {
+    const year = ncaaYearFor(se.id); if (year == null) return;
+    const j = await loadNcaa(year), scale = j?.hitplus; if (!scale) return;
+    const springId = `${year}-spring`;
+    const spring = S.meta.seasons.some(s => s.id === springId) ? (se.id === springId ? se : await loadSeason(springId)) : null;
+    const calib = hpCalibration(scale, spring);
+    const tm = new Map();
+    if (se.id === springId && j.hitting) for (const o of j.hitting.list) if (/boston college/i.test(o.team || '') && o['Hit+'] != null) tm.set(normName(o.name), o);
+    for (const [i, rows] of se.byH) {
+      const p = S.players[i]; if (!p.bc) continue;
+      const sc = hpScore(hpInputs(rows, scale), scale, calib); if (!sc) continue;
+      const t = tm.get(normName(p.n));
+      const tg = t ? Object.fromEntries(scale.groups.filter(g => t[`Hit+ ${g}`] != null).map(g => [g, t[`Hit+ ${g}`]])) : null;
+      se.hitPlus.set(i, t ? { hit: t['Hit+'], groups: tg, src: 'TruMedia', year } : { hit: sc.hit, groups: sc.groups, src: 'TrackMan', year, calibrated: !!calib });
+    }
+  } catch (err) { console.warn('Hit+ unavailable', err); }
+}
+const hpVal = (se, i) => se.hitPlus?.get(i)?.hit ?? null;
+
 function seasonHitters(se) {
   if (se.cache.hit) return se.cache.hit;
   const out = [];
   for (const [i, rows] of se.byH) {
     const p = S.players[i]; if (!p.bc) continue;
     const st = stats(rows); if (!st.PA) continue;
-    out.push({ i, name: p.n, ...st, bats: p.b });
+    out.push({ i, name: p.n, ...st, bats: p.b, hitPlus: hpVal(se, i) });
   }
   const q = MIN_PA;   // qualifying minimum for rate stats, leaderboards and percentiles
   out.forEach(o => o.q = o.PA >= q);
@@ -367,6 +450,7 @@ const C = {
   BB: { k: 'BB', label: 'BB', fmt: F.int }, K: { k: 'K', label: 'SO', fmt: F.int }, HBP: { k: 'HBP', label: 'HBP', fmt: F.int },
   avg: { k: 'avg', label: 'AVG', fmt: F.avg }, obp: { k: 'obp', label: 'OBP', fmt: F.avg }, slg: { k: 'slg', label: 'SLG', fmt: F.avg },
   ops: { k: 'ops', label: 'OPS', fmt: F.avg }, iso: { k: 'iso', label: 'ISO', fmt: F.avg }, babip: { k: 'babip', label: 'BABIP', fmt: F.avg },
+  hitPlus: { k: 'hitPlus', label: 'Hit+', fmt: v => (v == null ? '—' : Math.round(v)), tip: 'Baseball America\'s Hit+: contact, EV90, chase, barrel and xwOBA on contact by pitch type, scaled to all D1 hitters in the TruMedia pull. 100 = D1 average; every 10 points = 1 standard deviation.' },
   woba: { k: 'woba', label: 'wOBA', fmt: F.avg }, xwoba: { k: 'xwoba', label: 'xwOBA', fmt: F.avg, tip: 'Expected wOBA from exit velocity and launch angle' },
   xba: { k: 'xba', label: 'xBA', fmt: F.avg }, xslg: { k: 'xslg', label: 'xSLG', fmt: F.avg },
   wobaDiff: { k: 'wobaDiff', label: 'wOBA−xwOBA', fmt: v => v == null ? '—' : (v >= 0 ? '+' : '−') + F.avg(Math.abs(v)) },
@@ -399,8 +483,8 @@ const C = {
 };
 const cols = (...ks) => ks.map(k => C[k]);
 const HIT_VIEWS = {
-  standard: ['Standard', cols('G', 'PA', 'AB', 'H', '2B', '3B', 'HR', 'BB', 'K', 'HBP', 'avg', 'obp', 'slg', 'ops', 'iso', 'babip', 'woba')],
-  statcast: ['Batted Ball', cols('PA', 'bbe', 'avgEV', 'ev90', 'maxEV', 'avgLA', 'ssPct', 'brl', 'brlPct', 'hhPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff', 'batSpd', 'maxBat')],
+  standard: ['Standard', cols('G', 'PA', 'AB', 'H', '2B', '3B', 'HR', 'BB', 'K', 'HBP', 'avg', 'obp', 'slg', 'ops', 'iso', 'babip', 'woba', 'hitPlus')],
+  statcast: ['Batted Ball', cols('PA', 'hitPlus', 'bbe', 'avgEV', 'ev90', 'maxEV', 'avgLA', 'ssPct', 'brl', 'brlPct', 'hhPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff', 'batSpd', 'maxBat')],
   discipline: ['Plate Discipline', cols('PA', 'pitches', 'kPct', 'bbPct', 'k2win', 'swing', 'zswing', 'chase', 'whiff', 'zcontact', 'contact', 'fpSwing')],
   profile: ['Batted-Ball Profile', cols('bbe', 'gbPct', 'ldPct', 'fbPct', 'puPct', 'pullPct', 'centPct', 'oppoPct', 'maxDist')],
   bat: ['Bat Tracking', cols('swingsTracked', 'batSpd', 'batTop', 'maxBat', 'fastPct', 'attackAngle', 'idealAA', 'attackDir', 'sqPct', 'blastPct', 'avgEV', 'hhPct')],
@@ -411,7 +495,7 @@ const PIT_VIEWS = {
   stuff: ['Stuff & Command', cols('pitches', 'fbVelo', 'fbMax', 'fbSpin', 'fbIVB', 'ext', 'zone', 'chase', 'whiff', 'csw', 'fpStrike', 'kPct', 'bbPct')],
 };
 const HIT_PCT = [
-  ['xwOBA', 'xwoba', 1, F.avg], ['xBA', 'xba', 1, F.avg], ['xSLG', 'xslg', 1, F.avg], ['Avg Exit Velo', 'avgEV', 1, F.f1], ['Max Exit Velo', 'maxEV', 1, F.f1],
+  ['Hit+', 'hitPlus', 1, v => Math.round(v)], ['xwOBA', 'xwoba', 1, F.avg], ['xBA', 'xba', 1, F.avg], ['xSLG', 'xslg', 1, F.avg], ['Avg Exit Velo', 'avgEV', 1, F.f1], ['Max Exit Velo', 'maxEV', 1, F.f1],
   ['Barrel %', 'brlPct', 1, F.pct], ['Hard-Hit %', 'hhPct', 1, F.pct], ['Sweet-Spot %', 'ssPct', 1, F.pct], ['Bat Speed', 'batSpd', 1, F.f1],
   ['Chase %', 'chase', -1, F.pct], ['Whiff %', 'whiff', -1, F.pct], ['K %', 'kPct', -1, F.pct], ['BB %', 'bbPct', 1, F.pct],
 ];
@@ -1132,6 +1216,7 @@ const AVG_STATS = new Set(['AVG', 'OBP', 'SLG', 'OPS', 'ISO', 'BABIP', 'wOBA', '
 function ncaaFmt(col, v) {
   if (v == null || !isFinite(v)) return '—';
   const base = col.replace('|PIT', '');
+  if (base.startsWith('Hit+')) return String(Math.round(v));
   if (col.includes('%')) return (v * 100).toFixed(1);
   if (AVG_STATS.has(base) || base === 'BA') return F.avg(v);
   if (['ERA', 'FIP', 'WHIP', 'K/9', 'BB/9'].includes(base)) return v.toFixed(2);
@@ -1291,8 +1376,9 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   const se = S.seasons[ui.season], rows = se.byH.get(i) || [], me = stats(rows);
   const T = seasonHitters(se), meRow = T.rows.find(o => o.i === i) || { ...me, q: false };
   const pool = T.rows.filter(o => o.q);
-  const perSeason = seasons.map(s => { const st = stats(S.seasons[s].byH.get(i) || []); return { ...st, name: seasonLabel(s), sid: s }; });
+  const perSeason = seasons.map(s => { const st = stats(S.seasons[s].byH.get(i) || []); return { ...st, hitPlus: hpVal(S.seasons[s], i), name: seasonLabel(s), sid: s }; });
   const all = stats(seasons.flatMap(s => S.seasons[s].byH.get(i) || [])); all._label = 'All seasons';
+  const hp = se.hitPlus?.get(i);
   const sCol = { k: 'name', label: 'Season', l: true, get: r => order(r.sid), html: r => esc(r.name) };
   function order(id) { return S.meta.seasons.findIndex(s => s.id === id); }
   ui.zm = ui.zm || 'xwoba';
@@ -1305,7 +1391,8 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   <section class="grid-pp">
     <div class="panel"><div class="panel-h"><h2>Percentile rankings</h2>${poolSwitch(hasNcaa)}</div>
       <p class="muted small" style="margin:-4px 0 10px">${esc(se.label)} · ${poolNote(alt, T, pool, 'PA', meRow)}</p>
-      ${pctBars(HIT_PCT.filter(d => d[1] !== 'batSpd' || pool.some(o => o.batSpd != null)), meRow, pool, alt)}</div>
+      ${pctBars(HIT_PCT.filter(d => (d[1] !== 'batSpd' || pool.some(o => o.batSpd != null)) && (d[1] !== 'hitPlus' || hp)), meRow, pool, alt)}
+      ${hp ? `<p class="muted small" style="margin:8px 0 0"><b>Hit+ ${Math.round(hp.hit)}</b>${Object.keys(hp.groups).filter(g => g !== 'ALL').length ? ' · ' + Object.entries(hp.groups).map(([g, v]) => `${{ FB: 'Fastballs', BR: 'Breaking', OS: 'Offspeed' }[g] || g} ${Math.round(v)}`).join(' · ') : ''} · ${hp.src === 'TruMedia' ? 'from TruMedia' : 'from TrackMan'}, scaled to D1 ${hp.year} (100 = average)</p>` : ''}</div>
     <div class="panel"><div class="panel-h"><h2>Spray chart</h2><span class="note">${esc(se.label)}</span></div><div class="chart-box">${sprayChart(rows)}</div></div>
   </section>
   <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
@@ -1750,6 +1837,7 @@ function pageGlossary() {
     ['CSW %', 'Called strikes plus swinging strikes ÷ pitches.'],
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
+    ['Hit+', 'Baseball America\'s hitting-quality metric. Five inputs (contact %, 90th-percentile exit velocity, chase %, barrel % and xwOBA on contact) are measured separately against fastballs, breaking balls and offspeed pitches. Each is regressed toward average by sample size, put on a 100 / 10-SD scale and weighted by how strongly it tracks wOBA, and the three pitch types count equally. Here the scale is set by every D1 hitter in the TruMedia pull, so 100 = D1 average and 110 = one standard deviation better. BC hitters that TruMedia has use TruMedia\'s inputs; fall seasons are scored from TrackMan, lined up with TruMedia using BC hitters who appear in both. Baseball America does not publish its exact weights, so this follows their method rather than copying their numbers.'],
     ['Expected movement (IVB vs x, HB vs x)', 'What a pitch type usually does for pitchers with the same arm slot (release height, release side and extension) and velocity. Each pitch is compared with the 60 most similar pitches of the same type thrown by other pitchers in this site\'s data (BC and opponents, all seasons), with lefties mirrored so both hands share one pool. IVB vs x: + means more carry or less drop than expected. HB vs x is in arm-side terms: + means more arm-side run, − means more glove-side sweep. On the movement chart, dashed rings show the expected spot and a dashed line runs to the actual average.'],
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
     ['Percentile rankings', 'Each bar ranks a player against qualified Boston College players in the same season (red = better, blue = worse). Hitters qualify with 5 or more plate appearances and pitchers with 5 or more batters faced. Non-qualified players are shown faded against the same pool.'],
@@ -1770,7 +1858,7 @@ function videoStatus(V) {
   const t = r.trumedia;
   return `<section class="panel"><div class="panel-h"><h2>Video</h2><span class="note">AWRE clip lists in data/video/ and TruMedia GameVideo</span></div>
     <p style="margin:0 0 8px"><b>${F.int(r.pitches)}</b> pitches · <b>${F.int(r.pas)}</b> at-bats · <b>${F.int(r.games)}</b> full games · <b>${F.int(r.players)}</b> player clips · <b>${F.int(r.other)}</b> other clips</p>
-    ${t ? `<p class="small" style="margin:4px 0"><b>TruMedia</b> (${esc(new Date(t.ran).toLocaleString())}): ${esc(t.status)}${(t.columns || []).length ? ` · columns returned: ${esc(t.columns.join(', '))}` : ''}${Object.keys(t.errors || {}).length ? `<br><span class="err" style="padding:0">${esc(Object.entries(t.errors).slice(0, 3).map(([g, e]) => g + ': ' + e).join(' | '))}</span>` : ''}</p>
+    ${t ? `<p class="small" style="margin:4px 0"><b>TruMedia</b> (${esc(new Date(t.ran).toLocaleString())}): ${esc(t.status)}${t.request ? ` · request: ${esc(t.request)}` : ''}${(t.attempts || []).length ? `<br><span class="muted">Tried: ${esc(t.attempts.join(' | '))}</span>` : ''}${(t.columns || []).length ? ` · columns returned: ${esc(t.columns.join(', '))}` : ''}${Object.keys(t.errors || {}).length ? `<br><span class="err" style="padding:0">${esc(Object.entries(t.errors).slice(0, 3).map(([g, e]) => g + ': ' + e).join(' | '))}</span>` : ''}</p>
       ${t.sample ? `<details><summary class="small">What TruMedia sent for ${esc(t.sample.gid)}</summary><pre class="small" style="white-space:pre-wrap;word-break:break-all">${esc(JSON.stringify(t.sample, null, 1))}</pre></details>` : ''}` : '<p class="small muted" style="margin:4px 0">TruMedia video has not run yet.</p>'}
     ${(r.sources || []).map(s => `<p class="small" style="margin:4px 0"><b>${esc(s.file)}</b>: ${s.status ? esc(s.status) : `${F.int(s.rows)} clip rows → ${['pitch', 'pa', 'game', 'player', 'other', 'none'].filter(k => s[k]).map(k => `${F.int(s[k])} ${{ pitch: 'pitches', pa: 'at-bats', game: 'games', player: 'player clips', other: 'other', none: 'not matched' }[k]}`).join(', ')}`}</p>`).join('')}
     ${(r.unmatched || []).length ? `<details><summary class="small">Clips that didn't match (${r.unmatched.length}${r.unmatched.length >= 60 ? '+' : ''})</summary>
@@ -1797,7 +1885,7 @@ function pageData() {
       } }], m.files, { nosort: true })}</section>
   ${m.ncaa?.report ? `<section class="panel"><div class="panel-h"><h2>TruMedia</h2><span class="note">Last run ${esc(new Date(m.ncaa.report.ran).toLocaleString())}</span></div>
     <p style="margin:0 0 10px"><b>${esc(m.ncaa.report.status)}</b></p>
-    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${r[sd].team_source ? ` · teams from ${esc(r[sd].team_source)}${r[sd].players_with_team != null ? ` (${F.int(r[sd].players_with_team)} placed)` : ''}` : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}</p>`).join('')}
+    ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${r[sd].team_source ? ` · teams from ${esc(r[sd].team_source)}${r[sd].players_with_team != null ? ` (${F.int(r[sd].players_with_team)} placed)` : ''}` : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}${r.hitplus ? `<br>Hit+: ${r.hitplus.error ? `<span class="err" style="padding:0">${esc(r.hitplus.error)}</span>` : `${F.int(r.hitplus.players || 0)} hitters · ${esc((r.hitplus.groups || []).join(', ') === 'ALL' ? 'all pitches (TruMedia pitch-type filters not accepted)' : 'by pitch type: ' + (r.hitplus.groups || []).join(', '))} · inputs: ${esc(Object.entries(r.hitplus.inputs || {}).map(([k, v]) => k + ' = ' + v).join(', '))}`}` : ''}</p>`).join('')}
   </section>` : ''}
   ${videoStatus(m.video)}
   ${(m.corrections || []).length ? `<section class="panel"><div class="panel-h"><h2>TrackMan corrections</h2><span class="note">From scripts/corrections.json</span></div>
