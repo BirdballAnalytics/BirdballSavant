@@ -53,11 +53,14 @@ jobs:
           key: trumedia-${{ github.run_id }}
           restore-keys: trumedia-
 
+      # Runs on every build. Mondays (or "Also refresh TruMedia NCAA stats") start a full refresh;
+      # every other build only continues a pull that hit its time limit, and exits right away if
+      # there is nothing left to do.
       - name: Pull TruMedia NCAA data
-        if: github.event_name == 'schedule' || inputs.pull_ncaa || contains(github.event.head_commit.modified, 'scripts/trumedia.json') || contains(github.event.head_commit.added, 'scripts/trumedia.json')
         timeout-minutes: 40
         continue-on-error: true
         env:
+          TRUMEDIA_MODE: ${{ (github.event_name == 'schedule' || inputs.pull_ncaa) && 'refresh' || 'resume' }}
           TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
           TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
           TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
