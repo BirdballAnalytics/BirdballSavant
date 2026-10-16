@@ -122,14 +122,28 @@ class OutOfTime(QueryError):
         super().__init__(0, "time limit for this run reached; the rest is picked up next run")
 
 
-def all_teams(tm: TruMedia, year: int, report: dict) -> pd.DataFrame | None:
-    """Documented query: AllTeams.csv?seasonYear=YYYY. Used for team IDs (per-team fallback)."""
+def all_teams(tm: TruMedia | None, year: int, report: dict) -> pd.DataFrame | None:
+    """Documented query: AllTeams.csv?seasonYear=YYYY. Used for team IDs (per-team fallback).
+    Saved for 7 days; with tm=None (publishing after the time limit) only the saved copy is used."""
+    f = OUT / f"ncaa-raw-{year}-allteams.json"
+    if f.exists():
+        try:
+            age = time.time() - f.stat().st_mtime
+            if tm is None or age < 7 * 86400:
+                return pd.read_json(f, orient="split", dtype=False)
+        except ValueError:
+            pass
+    if tm is None:
+        return None
     try:
         t = tm.query("AllTeams", {"seasonYear": year})
+    except OutOfTime:
+        raise
     except QueryError as e:
         report["all_teams_error"] = str(e)
         log(f"    AllTeams query failed: {e}")
         return None
+    t.to_json(f, orient="split", index=False)
     report["all_teams_columns"] = list(t.columns)[:40]
     report["all_teams_rows"] = len(t)
     log(f"    AllTeams: {len(t)} teams; columns {list(t.columns)[:25]}")
@@ -203,6 +217,8 @@ def pull_side(tm: TruMedia, year: int, cfg: dict, side: str, report: dict, strat
                 attempts.append(f"{st.name}: no rows")
                 log(f"    {st.name}: accepted but returned no rows")
                 continue
+        except OutOfTime:
+            raise
         except QueryError as e:
             attempts.append(f"{st.name}: {e}")
             log(f"    {st.name}: {e}")
@@ -214,6 +230,8 @@ def pull_side(tm: TruMedia, year: int, cfg: dict, side: str, report: dict, strat
             df = st.run(cols)
             report["columns_ok"], report["columns_rejected"] = cols, []
             return df
+        except OutOfTime:
+            raise
         except QueryError as e:
             log(f"    full column list rejected ({e}); checking columns one by one")
         good, bad = [], []
@@ -221,6 +239,8 @@ def pull_side(tm: TruMedia, year: int, cfg: dict, side: str, report: dict, strat
             try:
                 (lambda cc: st.run(cc, None, sample=True) if st.name.endswith("team by team") else st.run(cc))([c])
                 good.append(c)
+            except OutOfTime:
+                raise
             except QueryError:
                 bad.append(c)
         report["columns_ok"], report["columns_rejected"] = good, bad
@@ -270,7 +290,9 @@ class TeamLabeler:
       3. one PlayerTotals query per team (Power 4 first) to learn each roster."""
 
     def __init__(self, tm, year, cfg, p4, report):
+        # tm=None: offline (use only rosters saved by earlier runs)
         self.tm, self.year, self.cfg, self.p4, self.rep = tm, year, cfg, p4, report
+        self.complete = True
         self.teams = None        # teamId -> {"name", "conf"}
         self.members = None      # playerId or name -> teamId
 
@@ -326,10 +348,12 @@ class TeamLabeler:
         def fresh(t):
             d = seen.get(t)
             return bool(d) and (not current or datetime.fromisoformat(d) > stale)
-        todo = [t for t in order if not fresh(t)]
+        todo = [t for t in order if not fresh(t)] if self.tm is not None else []
+        self.complete = self.tm is not None
         base = {"seasonYear": self.year, "seasonType": self.cfg.get("seasonType", "REG"), "format": "RAW"}
         done = failed = streak = 0
-        log(f"    rosters: {len(order) - len(todo)} of {len(order)} teams saved from earlier runs; asking about {len(todo)} (Power 4 first)")
+        if self.tm is not None:
+            log(f"    rosters: {len(order) - len(todo)} of {len(order)} teams saved from earlier runs; asking about {len(todo)} (Power 4 first)")
         try:
             for tid in todo:
                 df = None
@@ -346,6 +370,7 @@ class TeamLabeler:
                     streak += 1
                     if streak >= 15:
                         log("    ! 15 roster queries in a row failed; stopping roster lookups for this run")
+                        self.complete = False
                         break
                     continue
                 done += 1
@@ -361,6 +386,9 @@ class TeamLabeler:
         except OutOfTime:
             log("    ! time limit reached during roster lookups; the remaining teams are asked next run")
             self.rep["time_limit_hit"] = True
+            self.complete = False
+        if self.tm is None:
+            return self.members
         cache_f.write_text(json.dumps({"key": key_col_name, "teams": seen, "members": self.members}, separators=(",", ":")))
         self.rep["roster_queries"] = {"teams": len(order), "saved": len(order) - len(todo), "ok": done, "failed": failed,
                                       "players": len(self.members)}
@@ -501,20 +529,34 @@ def tidy(df: pd.DataFrame, cfg: dict, side: str, p4: dict, report: dict):
 HP_BASE = ["PA", "AB", "K", "BB", "HBP", "xwOBA", "wOBA"]
 
 
-def pull_hitplus(tm, year, cfg, rep, p4, chosen_name, raw_hit):
+def hp_metrics_frame(df, inputs):
+    """TruMedia rows -> Hit+ inputs (fractions / mph), indexed by player id."""
+    df = df.copy()
+    ic = pick(df, "id") or pick(df, "name")
+    out = pd.DataFrame(index=df[ic].map(clean_id))
+    num = lambda c: pd.to_numeric(df[c], errors="coerce").to_numpy() if c in df else np.full(len(df), np.nan)
+    out["n"] = num("PA")
+    for m in ("contact", "chase", "barrel"):
+        if m in inputs and inputs[m] in df:
+            out[m] = to_frac(df[inputs[m]]).to_numpy()
+    if "ev90" in inputs and inputs["ev90"] in df:
+        out["ev90"] = (to_frac(df[inputs["ev90"]]) if "%" in inputs["ev90"] else to_num(df[inputs["ev90"]])).to_numpy()
+    if inputs.get("xwobacon", "").startswith("derived") or inputs.get("xwobacon") not in df:
+        ab, k, bb, hbp = num("AB"), num("K"), num("BB"), num("HBP")
+        xw = to_num(df["xwOBA"]).to_numpy() if "xwOBA" in df else np.full(len(df), np.nan)
+        bbe = ab - k
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out["xwobacon"] = np.where(bbe > 0, (xw * (ab + bb + hbp) - 0.69 * bb - 0.72 * hbp) / bbe, np.nan)
+    else:
+        out["xwobacon"] = to_num(df[inputs["xwobacon"]]).to_numpy()
+    return out.groupby(level=0).first()
+
+
+def hp_fetch(tm, year, cfg, rep, p4, chosen_name, raw_hit, ck):
+    """Network part of Hit+, as resumable steps: which columns to use, then one pull per pitch type."""
     hcfg = cfg.get("hitplus", {})
     if not hcfg.get("enabled", True) or raw_hit is None or raw_hit.empty:
-        return None
-    idc = pick(raw_hit, "id") or pick(raw_hit, "name")
-    if not idc:
-        rep["error"] = "no player id column"
-        return None
-    for c in ("PA", "wOBA"):
-        if c not in raw_hit.columns:
-            rep["error"] = f"hitting pull has no {c} column"
-            return None
-    overall = pd.DataFrame({"PA": pd.to_numeric(raw_hit["PA"], errors="coerce"),
-                            "wOBA": to_num(raw_hit["wOBA"])}).set_axis(raw_hit[idc].map(clean_id)).groupby(level=0).first()
+        return
 
     def runner(extra=None):
         st = next((x for x in strategies(tm, year, cfg, rep, p4, extra) if x.name == chosen_name), None)
@@ -525,84 +567,91 @@ def pull_hitplus(tm, year, cfg, rep, p4, chosen_name, raw_hit):
         return (lambda cols, sample=False: st.run(cols))
 
     run_all = runner()
-    # 1. which TruMedia column to use for each input
-    inputs = {}
-    for m, cands in hcfg.get("columns", {}).items():
-        for c in cands:
-            if c in raw_hit.columns:
-                inputs[m] = c
-                break
-            try:
-                run_all([c], sample=True)
-                inputs[m] = c
-                break
-            except OutOfTime:
-                raise
-            except QueryError:
-                continue
+
+    def probe_inputs():
+        inputs = {}
+        for m, cands in hcfg.get("columns", {}).items():
+            for c in cands:
+                if c in raw_hit.columns:
+                    inputs[m] = c
+                    break
+                try:
+                    run_all([c], sample=True)
+                    inputs[m] = c
+                    break
+                except OutOfTime:
+                    raise
+                except QueryError:
+                    continue
+        if "xwobacon" not in inputs:
+            inputs["xwobacon"] = "derived from xwOBA"
+        log(f"    Hit+ inputs: {inputs}")
+        return inputs
+
+    inputs = ck.unit("hp-inputs", probe_inputs)
     rep["inputs"] = inputs
-    if "xwobacon" not in inputs:
-        inputs["xwobacon"] = "derived from xwOBA"
-    log(f"    Hit+ inputs: {inputs}")
-    cols = list(dict.fromkeys(HP_BASE + [c for m, c in inputs.items() if not c.startswith("derived")]))
+    cols = list(dict.fromkeys(HP_BASE + [c for c in inputs.values() if not c.startswith("derived")]))
 
-    def metrics_frame(df):
-        df = df.copy()
-        ic = pick(df, "id") or pick(df, "name")
-        out = pd.DataFrame(index=df[ic].map(clean_id))
-        num = lambda c: pd.to_numeric(df[c], errors="coerce").to_numpy() if c in df else np.full(len(df), np.nan)
-        out["n"] = num("PA")
-        for m in ("contact", "chase", "barrel"):
-            if m in inputs and inputs[m] in df:
-                out[m] = to_frac(df[inputs[m]]).to_numpy()
-        if "ev90" in inputs and inputs["ev90"] in df:
-            out["ev90"] = (to_frac(df[inputs["ev90"]]) if "%" in inputs["ev90"] else to_num(df[inputs["ev90"]])).to_numpy()
-        if inputs["xwobacon"].startswith("derived"):
-            ab, k, bb, hbp = num("AB"), num("K"), num("BB"), num("HBP")
-            xw = to_num(df["xwOBA"]).to_numpy() if "xwOBA" in df else np.full(len(df), np.nan)
-            bbe = ab - k
-            with np.errstate(invalid="ignore", divide="ignore"):
-                out["xwobacon"] = np.where(bbe > 0, (xw * (ab + bb + hbp) - 0.69 * bb - 0.72 * hbp) / bbe, np.nan)
-        else:
-            out["xwobacon"] = to_num(df[inputs["xwobacon"]]).to_numpy()
-        return out.groupby(level=0).first()
+    def pull_group(g):
+        def go():
+            for f in hcfg.get("pitch_groups", {}).get(g, []):
+                try:
+                    rg = runner(f)
+                    t = rg(["PA"], sample=True)
+                    if t is None or t.empty:
+                        continue
+                    ref = run_all(["PA"], sample=True)
+                    share = pd.to_numeric(t["PA"], errors="coerce").sum() / max(1, pd.to_numeric(ref["PA"], errors="coerce").sum())
+                    if not 0.03 < share < 0.85:
+                        log(f"    Hit+ {g}: filter {f!r} accepted but didn't split the data (share {share:.2f})")
+                        continue
+                    df = rg(cols)
+                    df.attrs["filter"] = f
+                    log(f"    Hit+ {g}: using filter {f!r} ({len(df)} hitters)")
+                    return {"filter": f, "df": df}
+                except OutOfTime:
+                    raise
+                except QueryError as e:
+                    log(f"    Hit+ {g}: filter {f!r} rejected ({str(e)[:120]})")
+            return {"filter": None, "df": None}
+        return go
 
-    # 2. pitch-type splits
-    groups, used = {}, {}
-    total_pa = overall["PA"].sum()
-    for g, cands in hcfg.get("pitch_groups", {}).items():
-        for f in cands:
-            try:
-                rg = runner(f)
-                t = rg(["PA"], sample=True)
-                if t is None or t.empty:
-                    continue
-                ref = run_all(["PA"], sample=True)
-                share = pd.to_numeric(t["PA"], errors="coerce").sum() / max(1, pd.to_numeric(ref["PA"], errors="coerce").sum())
-                if not 0.03 < share < 0.85:
-                    log(f"    Hit+ {g}: filter {f!r} accepted but didn't split the data (share {share:.2f})")
-                    continue
-                groups[g] = metrics_frame(rg(cols))
-                used[g] = f
-                log(f"    Hit+ {g}: using filter {f!r} ({len(groups[g])} hitters)")
-                break
-            except OutOfTime:
-                raise
-            except QueryError as e:
-                log(f"    Hit+ {g}: filter {f!r} rejected ({str(e)[:120]})")
-    rep["pitch_group_filters"] = used
-    kmult = 1.0
-    if set(groups) != set(hitplus.GROUPS):
+    got = {g: ck.unit(f"hp-{g}", pull_group(g), kind="df") for g in hitplus.GROUPS}
+    if not all(v["df"] is not None for v in got.values()):
         log("    Hit+: pitch-type splits not available; using all pitches together")
-        groups = {"ALL": metrics_frame(run_all(cols))}
-        kmult = 2.0
+        ck.unit("hp-ALL", lambda: {"filter": "all pitches", "df": run_all(cols)}, kind="df")
+
+
+def hp_build(cfg, rep, raw_hit, ck):
+    """Offline part of Hit+: scale + scores from whatever the fetch steps have saved."""
+    hcfg = cfg.get("hitplus", {})
+    if not hcfg.get("enabled", True) or raw_hit is None or raw_hit.empty:
+        return None
+    inputs = ck.latest("hp-inputs")
+    if not inputs:
+        return None
+    idc = pick(raw_hit, "id") or pick(raw_hit, "name")
+    if not idc or "PA" not in raw_hit or "wOBA" not in raw_hit:
+        rep["error"] = "hitting pull has no player id, PA or wOBA column"
+        return None
+    overall = pd.DataFrame({"PA": pd.to_numeric(raw_hit["PA"], errors="coerce").to_numpy(),
+                            "wOBA": to_num(raw_hit["wOBA"]).to_numpy()},
+                           index=raw_hit[idc].map(clean_id)).groupby(level=0).first()
+    frames = {g: ck.latest(f"hp-{g}", kind="df") for g in hitplus.GROUPS}
+    if all(v and v["df"] is not None for v in frames.values()):
+        groups, kmult = {g: hp_metrics_frame(v["df"], inputs) for g, v in frames.items()}, 1.0
+        rep["pitch_group_filters"] = {g: v["filter"] for g, v in frames.items()}
+    else:
+        a = ck.latest("hp-ALL", kind="df")
+        if not a or a["df"] is None:
+            return None
+        groups, kmult = {"ALL": hp_metrics_frame(a["df"], inputs)}, 2.0
     scale, scores = hitplus.build(groups, overall, cfg.get("qualify", {}).get("hitting_PA", 100), kmult, hcfg.get("k"))
     if scale is None:
         rep["error"] = "not enough data to build Hit+"
         return None
     scale["inputs"] = inputs
     scale["names"] = hitplus.GROUP_NAMES
-    # raw inputs for Boston College hitters, so fall (TrackMan-only) scores can be calibrated to TruMedia
     tcol = "__team" if "__team" in raw_hit.columns else pick(raw_hit, "team")
     bc_ids = set(raw_hit.loc[raw_hit[tcol].astype(str).str.contains("Boston College", case=False, na=False), idc].map(clean_id)) if tcol else set()
     nmc = pick(raw_hit, "name")
@@ -622,6 +671,135 @@ def to_frac(s):
     return hitplus.to_frac(s)
 
 
+# ----------------------------------------------------------------------------
+# Resumable pulls: each step saves its result; the site is republished after every
+# step; when the time limit hits, the next run starts at the first unfinished step.
+# ----------------------------------------------------------------------------
+class Checkpoint:
+    def __init__(self, year, cfg, cfg_hash, mode):
+        self.year, self.f = year, OUT / f"ncaa-progress-{year}.json"
+        try:
+            self.prog = json.loads(self.f.read_text()) if self.f.exists() else {}
+        except ValueError:
+            self.prog = {}
+        now = datetime.now(timezone.utc)
+        current = year >= now.year - (1 if now.month < 2 else 0)
+        days = float(cfg.get("refresh_days", 5) if current else cfg.get("refresh_days_past_seasons", 30))
+        done_at = self.prog.get("complete")
+        if self.prog.get("cfg") != cfg_hash:
+            self.why = "settings changed" if self.prog else "first pull"
+            self.new_cycle(cfg_hash)
+        elif not done_at:
+            self.why = f"resuming ({len(self.prog.get('done', {}))} steps already done)"
+        elif mode == "refresh" and now - datetime.fromisoformat(done_at) > timedelta(days=days):
+            self.why = "weekly refresh"
+            self.new_cycle(cfg_hash)
+        else:
+            self.why = None          # up to date: nothing to do this run
+
+    def new_cycle(self, cfg_hash):
+        self.prog = {"cfg": cfg_hash, "cycle": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                     "done": {}, "complete": None, "report": self.prog.get("report", {}), "chosen": self.prog.get("chosen")}
+        self.save()
+
+    def save(self):
+        self.f.write_text(json.dumps(self.prog, indent=1, default=str))
+
+    def path(self, key):
+        return OUT / f"ncaa-raw-{self.year}-{key}.json"
+
+    def done(self, key):
+        return key in self.prog["done"]
+
+    def mark(self, key):
+        self.prog["done"][key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.save()
+
+    def unit(self, key, compute, kind="json"):
+        """Run a step once per cycle; its result is saved so later runs (and publishing) reuse it."""
+        if self.done(key):
+            return self.latest(key, kind)
+        val = compute()
+        self._write(key, val, kind)
+        self.mark(key)
+        return val
+
+    def _write(self, key, val, kind):
+        if kind == "df":
+            if isinstance(val, dict):
+                meta = {k: v for k, v in val.items() if k != "df"}
+                df = val.get("df")
+            else:
+                meta, df = {}, val
+            body = {"meta": meta, "df": None if df is None else json.loads(df.to_json(orient="split", index=False))}
+            self.path(key).write_text(json.dumps(body, separators=(",", ":")))
+        else:
+            self.path(key).write_text(json.dumps(val, default=str))
+
+    def latest(self, key, kind="json"):
+        """Most recent saved result for a step, from this cycle or an earlier one (None if never run)."""
+        f = self.path(key)
+        if not f.exists():
+            return None
+        try:
+            body = json.loads(f.read_text())
+        except ValueError:
+            return None
+        if kind != "df":
+            return body
+        d = body.get("df")
+        df = pd.DataFrame(d["data"], columns=d["columns"]) if d else None
+        meta = body.get("meta") or {}
+        return {**meta, "df": df} if meta else df
+
+
+def cfg_fingerprint(cfg):
+    import hashlib
+    keep = {k: v for k, v in cfg.items() if not k.startswith("_") and "time_limit" not in k and "refresh_days" not in k}
+    return hashlib.sha1(json.dumps(keep, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def publish(year, cfg, p4, ck, report_year):
+    """Write ncaa-<year>.json from every saved step (offline; no TruMedia calls)."""
+    out = {"year": year, "pulled": ck.prog.get("complete") or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "complete": bool(ck.prog.get("complete")), "qualify": cfg.get("qualify", {}),
+           "percentile_map": cfg.get("percentile_map", {})}
+    labeler = TeamLabeler(None, year, cfg, p4, report_year.setdefault("labels", {}))
+    raw_hit = None
+    for side in ("hitting", "pitching"):
+        df = ck.latest(side, kind="df")
+        if df is None or df.empty:
+            continue
+        srep = report_year.setdefault(side, {})
+        df = labeler.label(df, srep)
+        if side == "hitting":
+            raw_hit = df
+        out[side] = tidy(df, cfg, side, p4, srep)
+        srep["rows"] = len(out[side]["rows"])
+        srep["power4_rows"] = sum(r[5] for r in out[side]["rows"])
+    if raw_hit is not None and out.get("hitting"):
+        hrep = report_year.setdefault("hitplus", {})
+        try:
+            res = hp_build(cfg, hrep, raw_hit, ck)
+            if res:
+                scale, scores = res
+                h = out["hitting"]
+                extra = [g for g in scale["groups"] if g != "ALL"]
+                h["stats"] += ["Hit+"] + [f"Hit+ {g}" for g in extra]
+                for row in h["rows"]:
+                    for c in ["hit"] + extra:
+                        v = scores[c].get(row[0]) if row[0] in scores.index else None
+                        row.append(None if v is None or v != v else float(v))
+                out["hitplus"] = scale
+        except Exception as e:
+            hrep["error"] = str(e)[:300]
+            log(f"    ! Hit+: {e}")
+    if out.get("hitting") or out.get("pitching"):
+        (OUT / f"ncaa-{year}.json").write_text(json.dumps(out, separators=(",", ":")))
+        return True
+    return False
+
+
 def main():
     cfg = json.loads(CONFIG.read_text())
     report = {"ran": datetime.now(timezone.utc).isoformat(timespec="seconds"), "status": "", "years": {}}
@@ -629,86 +807,91 @@ def main():
 
     def finish(status):
         report["status"] = status
-        (OUT / "ncaa-report.json").write_text(json.dumps(report, indent=1))
+        (OUT / "ncaa-report.json").write_text(json.dumps(report, indent=1, default=str))
         log(f"TruMedia: {status}")
 
     if not cfg.get("enabled"):
-        for f in OUT.glob("ncaa-[0-9]*.json"):
+        for f in OUT.glob("ncaa-*.json"):
             f.unlink()   # turning the pull off also takes TruMedia data off the site
         return finish("disabled in scripts/trumedia.json")
+    # refresh = scheduled Monday run or "Also refresh TruMedia NCAA stats" ticked; resume = any other build
+    mode = os.environ.get("TRUMEDIA_MODE", "refresh").strip() or "refresh"
+    fp = cfg_fingerprint(cfg)
+    cks = {y: Checkpoint(y, cfg, fp, mode) for y in cfg.get("seasons", [])}
+    todo = [y for y, ck in cks.items() if ck.why]
+    for y, ck in cks.items():
+        report["years"][str(y)] = {**ck.prog.get("report", {}), "state": "complete" if ck.prog.get("complete") else "in progress",
+                                   "steps_done": sorted(ck.prog.get("done", {}))}
+    if not todo:
+        return finish("up to date (nothing to resume; the full refresh runs every Monday)")
     user, site, master = (os.environ.get(k, "").strip() for k in
                           ("TRUMEDIA_USERNAME", "TRUMEDIA_SITENAME", "TRUMEDIA_MASTER_TOKEN"))
     if not (user and site and master):
         return finish("skipped: TruMedia secrets are not set in the repository")
+    budget = float(cfg.get("time_limit_minutes", DEFAULT_BUDGET_MIN) if mode == "refresh"
+                   else cfg.get("resume_time_limit_minutes", 20))
     try:
-        tm = TruMedia(user, site, master, float(cfg.get("time_limit_minutes", DEFAULT_BUDGET_MIN)))
+        tm = TruMedia(user, site, master, budget)
     except Exception as e:
         return finish(f"could not sign in to TruMedia ({str(e)[:200]})")
 
     p4 = p4_lookup(cfg)
-    ok_years = 0
-    for year in cfg.get("seasons", []):
-        yr = report["years"].setdefault(str(year), {})
-        strats, chosen = strategies(tm, year, cfg, yr, p4), {}
-        labeler = TeamLabeler(tm, year, cfg, p4, yr)
-        out = {"year": year, "pulled": report["ran"], "qualify": cfg.get("qualify", {}),
-               "percentile_map": cfg.get("percentile_map", {})}
-        raw_hit = None
+    finished = []
+    for year in todo:
+        ck = cks[year]
+        yr = ck.prog.setdefault("report", {})
+        log(f"  {year}: {ck.why}")
+        strats = strategies(tm, year, cfg, yr, p4)
+        chosen = {"s": next((x for x in strats if x.name == ck.prog.get("chosen")), None)}
         try:
             for side in ("hitting", "pitching"):
                 srep = yr.setdefault(side, {})
-                log(f"  {year} {side}: pulling")
-                df = pull_side(tm, year, cfg, side, srep, strats, chosen)
-                if df is None or df.empty:
-                    srep["rows"] = 0
-                    continue
-                df = labeler.label(df, srep)
-                if side == "hitting":
-                    raw_hit = df
-                log(f"    teams from: {srep.get('team_source')}"
-                    + (f" ({srep.get('players_with_team')} of {len(df)} players placed)" if 'players_with_team' in srep else ""))
-                out[side] = tidy(df, cfg, side, p4, srep)
-                srep["rows"] = len(out[side]["rows"])
-                srep["power4_rows"] = sum(r[5] for r in out[side]["rows"])
-                log(f"    {srep['rows']} players ({srep['power4_rows']} Power 4); "
-                    f"Power 4 teams matched: {srep.get('power4_teams_matched')}")
-                if srep.get("power4_teams_missing"):
-                    log(f"    ! Power 4 teams not found (add aliases in trumedia.json): {srep['power4_teams_missing']}")
-            if out.get("hitting") and chosen.get("s") is not None:
-                hrep = yr.setdefault("hitplus", {})
-                try:
-                    log(f"  {year} Hit+: building")
-                    res = pull_hitplus(tm, year, cfg, hrep, p4, chosen["s"].name, raw_hit)
-                    if res:
-                        scale, scores = res
-                        h = out["hitting"]
-                        extra = [g for g in scale["groups"] if g != "ALL"]
-                        h["stats"] += ["Hit+"] + [f"Hit+ {g}" for g in extra]
-                        for row in h["rows"]:
-                            for c in ["hit"] + extra:
-                                v = scores[c].get(row[0]) if row[0] in scores.index else None
-                                row.append(None if v is None or v != v else float(v))
-                        out["hitplus"] = scale
-                        log(f"    Hit+ for {hrep.get('players')} hitters ({', '.join(scale['groups'])})")
-                except OutOfTime:
-                    raise
-                except Exception as e:
-                    hrep["error"] = str(e)[:300]
-                    log(f"    ! Hit+: {e}")
-            yf = OUT / f"ncaa-{year}.json"
-            if tm.out_of_time() and yf.exists():
-                log(f"  {year}: time limit reached mid-pull; keeping the last complete {year} pull on the site")
-            elif out.get("hitting") or out.get("pitching"):
-                yf.write_text(json.dumps(out, separators=(",", ":")))
-                ok_years += 1
+
+                def pull(side=side, srep=srep):
+                    log(f"  {year} {side}: pulling")
+                    df = pull_side(tm, year, cfg, side, srep, strats, chosen)
+                    if chosen.get("s") is not None:
+                        ck.prog["chosen"] = chosen["s"].name
+                    return df if df is not None else pd.DataFrame()
+                ck.unit(side, pull, kind="df")
+                publish(year, cfg, p4, ck, yr)
+            if not ck.done("rosters"):
+                labeler = TeamLabeler(tm, year, cfg, p4, yr.setdefault("labels", {}))
+                for side in ("hitting", "pitching"):
+                    df = ck.latest(side, kind="df")
+                    if df is not None and not df.empty:
+                        labeler.label(df, yr.setdefault(side, {}))
+                if labeler.complete:
+                    ck.mark("rosters")
+                publish(year, cfg, p4, ck, yr)
+                if tm.out_of_time():
+                    raise OutOfTime()
+            raw_hit = ck.latest("hitting", kind="df")
+            if chosen.get("s") is not None and raw_hit is not None and not raw_hit.empty:
+                log(f"  {year} Hit+: pulling")
+                hp_fetch(tm, year, cfg, yr.setdefault("hitplus", {}), p4, chosen["s"].name, raw_hit, ck)
+            ck.prog["complete"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            ck.save()
+            publish(year, cfg, p4, ck, yr)
+            finished.append(year)
+            log(f"  {year}: complete")
+        except OutOfTime:
+            report["time_limit_hit"] = True
+            publish(year, cfg, p4, ck, yr)
+            ck.save()
+            log(f"  ! time limit reached during {year}; everything pulled so far is on the site and the next run picks up from here")
+            break
         except Exception as e:
             yr["error"] = str(e)[:300]
+            ck.save()
+            publish(year, cfg, p4, ck, yr)
             log(f"  ! {year}: {e}")
-        if tm.out_of_time():
-            report["time_limit_hit"] = True
-            log("  ! time limit reached; earlier pulls are kept and the rest is picked up next run")
-            break
-    finish(f"pulled {ok_years} of {len(cfg.get('seasons', []))} seasons" if ok_years else "no seasons pulled; see errors")
+        finally:
+            report["years"][str(year)] = {**yr, "state": "complete" if ck.prog.get("complete") else "in progress",
+                                          "steps_done": sorted(ck.prog.get("done", {}))}
+    left = [y for y in todo if y not in finished]
+    finish(f"complete: {', '.join(map(str, finished)) or 'none'}"
+           + (f"; still in progress: {', '.join(map(str, left))} (published what was pulled; the next build continues)" if left else ""))
 
 
 if __name__ == "__main__":

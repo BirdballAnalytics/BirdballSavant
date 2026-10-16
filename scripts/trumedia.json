@@ -11,6 +11,10 @@
   "label_all_teams": true,
   "_time_limit_minutes": "The pull stops asking TruMedia after this many minutes. Team rosters are saved between runs, so a big first pull finishes over a few runs.",
   "time_limit_minutes": 30,
+  "_resume": "When a pull hits its time limit, everything pulled so far is published and the next build (any upload, or Run workflow) continues where it stopped, using resume_time_limit_minutes. A full refresh starts on the Monday run once the last pull is refresh_days old (past seasons: refresh_days_past_seasons). Changing this file starts a fresh pull.",
+  "resume_time_limit_minutes": 20,
+  "refresh_days": 5,
+  "refresh_days_past_seasons": 30,
   "hitting_columns": [
     "PA",
     "AB",
