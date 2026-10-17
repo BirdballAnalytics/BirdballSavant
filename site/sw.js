@@ -1,6 +1,6 @@
 // BirdballSavant service worker: always fetch fresh from the network so weekly
 // updates show up immediately; fall back to the last copy only when offline.
-const CACHE = 'bbs-v3';
+const CACHE = 'bbs-v4';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
