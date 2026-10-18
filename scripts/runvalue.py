@@ -257,9 +257,23 @@ GRID_Z = np.linspace(-0.5, 5.0, 56)
 SIGMA = 0.22            # ft of smoothing
 
 
+def gaussian_filter(a, sigma, mode="nearest", truncate=4.0):
+    """Same result as scipy.ndimage.gaussian_filter(a, sigma, mode="nearest") for a 2-D array,
+    using numpy only (scipy is not installed on the build server)."""
+    r = int(truncate * sigma + 0.5)
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    k /= k.sum()
+    out = np.asarray(a, float)
+    for axis in (0, 1):
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (r, r)
+        p = np.pad(out, pad, mode="edge")
+        out = np.apply_along_axis(lambda v: np.convolve(v, k, mode="valid"), axis, p)
+    return out
+
+
 def _smooth(x, z, w, values=None):
     """Kernel-smoothed mean (or density) of values on the location grid."""
-    from scipy.ndimage import gaussian_filter
     ix = np.clip(np.round((x - GRID_X[0]) / 0.1).astype(int), 0, len(GRID_X) - 1)
     iz = np.clip(np.round((z - GRID_Z[0]) / 0.1).astype(int), 0, len(GRID_Z) - 1)
     num = np.zeros((len(GRID_X), len(GRID_Z)))
