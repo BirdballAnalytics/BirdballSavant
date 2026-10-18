@@ -24,6 +24,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import video  # noqa: E402  (AWRE / TruMedia clip matching)
+import runvalue  # noqa: E402  (pitch run values + swing-decision model)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -843,10 +844,13 @@ def build():
         untracked = df["nt"].eq(1)
         df.loc[untracked, ["xba", "xslg", "xwv"]] = np.nan
         df = expected_movement(df)
+    rv_report = {}
+    if not df.empty and "call" in df.columns and df["nt"].eq(0).any():
+        df, rv_report = runvalue.add_run_values(df, Path(__file__).resolve().parent / "re288.csv", log)
 
     df, forced_bats, bats_report = fix_batter_sides(df)
 
-    for c in ("xivb", "xhb"):
+    for c in ("xivb", "xhb", "rv", "dv", "az", "dg"):
         if c not in df.columns:
             df[c] = np.nan
 
@@ -989,6 +993,10 @@ def build():
             "ax": [r(x, 0) for x in sdf["SpinAxis"]],
             "ivb": [r(x, 1) for x in sdf["InducedVertBreak"]],
             "hb": [r(x, 1) for x in sdf["HorzBreak"]],
+            "rv": [r(x, 3) for x in sdf["rv"]],
+            "dv": [r(x, 3) for x in sdf["dv"]],
+            "az": [r(x, 0) for x in sdf["az"]],
+            "dg": [r(x, 0) for x in sdf["dg"]],
             "xivb": [r(x, 1) for x in sdf["xivb"]],
             "xhb": [r(x, 1) for x in sdf["xhb"]],
             "rh": [r(x, 2) for x in sdf["RelHeight"]],
@@ -1042,6 +1050,7 @@ def build():
         "seasons": seasons_meta, "files": manifest, "teams": teams,
         "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report, "bats": bats_report,
         "ncaa": ncaa_index(),
+        "runvalue": rv_report,
         "video": {"report": vreport, "players": vextra["players"], "other": vextra["other"]},
         "weights": W,
     }
