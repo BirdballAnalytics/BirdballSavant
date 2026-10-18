@@ -1,5 +1,8 @@
 /* Layout: Cardinal scoreboard bar over a quiet data canvas; condensed display type for names & numbers. */
 :root {
+  --az-heart: #3e9b5c; --az-heart-soft: #c4e6cf; --az-shadow: #e2bd2f; --az-shadow-soft: #f6e8b0;
+  --az-chase: #d1293d; --az-chase-soft: #f3c0c6; --az-waste: #a3a3a3; --az-waste-soft: #e6e6e6;
+  --az-sw: #5585d6; --az-tk: #c8a964;
   --bg: #f4f3f4;
   --surface: #ffffff;
   --surface-2: #f8f6f7;
@@ -332,3 +335,28 @@ a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85;
 .vm-nav .btn[disabled] { opacity: .35; pointer-events: none; }
 .vm-src { margin: 0; padding: 0 16px 12px; }
 @media (max-width: 640px) { .vmodal { width: 100vw; max-width: 100vw; max-height: 100vh; border-radius: 0; } .vm-nav { margin-left: 0; } .vm-title { white-space: normal; font-size: .9rem; } }
+
+/* ---------- swing / take run value ---------- */
+:root[data-theme="dark"] { --az-heart-soft: #24442f; --az-shadow-soft: #4f4420; --az-chase-soft: #52222a; --az-waste-soft: #333; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --az-heart-soft: #24442f; --az-shadow-soft: #4f4420; --az-chase-soft: #52222a; --az-waste-soft: #333; } }
+.az-grid { display: grid; grid-template-columns: minmax(200px, 250px) minmax(0, 1fr); gap: 18px; align-items: center; }
+.az-rows { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.az-rows svg { flex: 1 1 250px; max-width: 330px; }
+@media (max-width: 760px) { .az-grid { grid-template-columns: minmax(0, 1fr); } .az-zone { max-width: 260px; margin: 0 auto; } }
+.chart .az-lab { font-size: 15px; font-weight: 700; fill: var(--ink); }
+.chart .az-lab.big { font-size: 16px; }
+.chart .az-sub { font-size: 12px; fill: var(--muted); }
+.chart .az-h { font-size: 15px; font-weight: 700; fill: var(--ink); font-family: var(--f-display); text-transform: uppercase; letter-spacing: .04em; }
+.chart .az-name { font-size: 15px; font-weight: 700; fill: var(--ink); font-family: var(--f-display); text-transform: uppercase; }
+.chart .az-num { font-size: 12.5px; fill: var(--ink); }
+.chart .az-tiny { font-size: 11px; fill: var(--ink); }
+.chart .az-muted { fill: var(--muted); }
+.chart .az-axis { stroke: var(--line-strong); }
+.chart .az-lg-sw, .chart .az-lg-tk { stroke: var(--muted); stroke-width: 5; stroke-dasharray: 7 3; }
+.chart .az-lg-tk { stroke-opacity: .45; }
+.chart .az-rv-sw { fill: var(--az-sw); }
+.chart .az-rv-tk { fill: var(--az-tk); }
+.chart .az-tot { font-size: 14px; font-weight: 700; font-family: var(--f-display); }
+.chart .az-sw-t { fill: var(--az-sw); } .chart .az-tk-t { fill: var(--az-tk); }
+.az-big { font-size: 1rem; } .az-big.pos { color: var(--good); } .az-big.neg { color: var(--pct-hi); }
+.az-chip { display: inline-block; padding: 1px 8px; border-radius: 3px; color: var(--ink); font-weight: 600; }

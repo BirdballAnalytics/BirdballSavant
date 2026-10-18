@@ -124,7 +124,8 @@ function stats(rows) {
     wsum: 0, xwsum: 0, xbasum: 0, xslgsum: 0, bbe: 0, evs: [], las: [], hh: 0, brl: 0, ss: 0, gb: 0, ld: 0, fb: 0, pu: 0, htN: 0,
     pull: 0, cent: 0, oppo: 0, dirN: 0, sw: 0, wh: 0, zn: 0, zsw: 0, zcon: 0, ozn: 0, osw: 0, ocon: 0, locN: 0, fpN: 0, fps: 0, fpk: 0, csw: 0,
     bats: [], runs: 0, outs: 0, games: new Set(), dists: [], ntPA: 0, tAB: 0, tden: 0,
-    fast: 0, vats: [], ideal: 0, hats: [], sqN: 0, sq: 0, blast: 0, k2PA: 0, k2W: 0 };
+    fast: 0, vats: [], ideal: 0, hats: [], sqN: 0, sq: 0, blast: 0, k2PA: 0, k2W: 0,
+    rvN: 0, rv: 0, rvSw: 0, rvTk: 0, dvN: 0, dv: 0, dvGood: 0 };
   for (const r of rows) {
     t.games.add(r.sid + ':' + r.g);
     const nt = r.nt === 1;          // results-only PA with no tracking at all
@@ -135,6 +136,8 @@ function stats(rows) {
     else if (r.iz === false) { t.ozn++; t.locN++; if (r.sw) { t.osw++; if (!r.wh) t.ocon++; } }
     if (r.ppa === 1) { t.fpN++; if (r.sw) t.fps++; if (r.c === 'C' || r.c === 'S' || r.c === 'F' || r.c === 'X') t.fpk++; }
     if (r.c === 'C' || r.c === 'S') t.csw++;
+    if (r.rv != null) { t.rvN++; t.rv += r.rv; if (r.sw) t.rvSw += r.rv; else t.rvTk += r.rv; }
+    if (r.dv != null) { t.dvN++; t.dv += r.dv; if (r.dg === 1) t.dvGood++; }
     if (r.bat != null && r.bat >= 50 && r.bat <= 95 && r.sw) {
       t.bats.push(r.bat);
       if (r.bat >= 75) t.fast++;
@@ -199,6 +202,8 @@ function stats(rows) {
     attackDir: t.hats.length ? mean(t.hats) : null,
     k2win: d(t.k2W, t.k2PA), k2PA: t.k2PA, k2W: t.k2W,
     sqPct: t.sqN ? t.sq / t.sqN : null, blastPct: t.sqN ? t.blast / t.sqN : null, contactsTracked: t.sqN,
+    rv: t.rvN ? t.rv : null, rvSwing: t.rvN ? t.rvSw : null, rvTake: t.rvN ? t.rvTk : null,
+    decRV: t.dvN ? t.dv : null, dec100: t.dvN ? 100 * t.dv / t.dvN : null, decGood: d(t.dvGood, t.dvN), decN: t.dvN,
     runs: t.runs, outs: t.outs, maxDist: t.dists.length ? Math.max(...t.dists) : null,
   };
   o.ops = o.obp != null && o.slg != null ? o.obp + o.slg : null;
@@ -341,6 +346,17 @@ async function prepHitPlus(se) {
 }
 const hpVal = (se, i) => se.hitPlus?.get(i)?.hit ?? null;
 
+// Decision grade scale: every hitter in the season's data (BC and opponents) with 75+ graded pitches
+function decisionPool(se) {
+  if (se.cache.decPool) return se.cache.decPool;
+  const v = [];
+  for (const [, rows] of se.byH) {
+    let n = 0, s = 0; for (const r of rows) if (r.dv != null) { n++; s += r.dv; }
+    if (n >= 75) v.push(100 * s / n);
+  }
+  const m = mean(v), sd = v.length > 2 ? Math.sqrt(mean(v.map(x => (x - m) ** 2))) : null;
+  return (se.cache.decPool = { mean: m, sd, n: v.length });
+}
 function seasonHitters(se) {
   if (se.cache.hit) return se.cache.hit;
   const out = [];
@@ -351,7 +367,9 @@ function seasonHitters(se) {
   }
   const q = MIN_PA;   // qualifying minimum for rate stats, leaderboards and percentiles
   out.forEach(o => o.q = o.PA >= q);
-  return (se.cache.hit = { rows: out, q });
+  const dp = decisionPool(se);
+  out.forEach(o => { o.decGrade = o.dec100 != null && dp.sd ? Math.max(20, Math.min(80, 50 + 10 * (o.dec100 - dp.mean) / dp.sd)) : null; });
+  return (se.cache.hit = { rows: out, q, decPool: dp });
 }
 function seasonPitchers(se) {
   if (se.cache.pit) return se.cache.pit;
@@ -466,6 +484,12 @@ const C = {
   swing: { k: 'swing', label: 'Swing%', fmt: F.pct }, zone: { k: 'zone', label: 'Zone%', fmt: F.pct }, zswing: { k: 'zswing', label: 'Z-Swing%', fmt: F.pct },
   chase: { k: 'chase', label: 'Chase%', fmt: F.pct, tip: 'Swings at pitches outside the zone' }, whiff: { k: 'whiff', label: 'Whiff%', fmt: F.pct, tip: 'Misses per swing' },
   zcontact: { k: 'zcontact', label: 'Z-Contact%', fmt: F.pct }, contact: { k: 'contact', label: 'Contact%', fmt: F.pct },
+  rv: { k: 'rv', label: 'Run Value', fmt: v => fmtRV(v), tip: 'Runs added by the hitter across every pitch seen, from the count-and-base-out run value matrix (+ = good for the hitter)' },
+  rvP: { k: 'rvP', label: 'Run Value', get: r => (r.rv == null ? null : -r.rv), fmt: v => fmtRV(v), tip: 'Runs saved by the pitcher across every pitch thrown, from the count-and-base-out run value matrix (+ = good for the pitcher)' },
+  decRV: { k: 'decRV', label: 'Decision RV', fmt: v => fmtRV(v), tip: 'Runs gained or lost by swing/take choices compared with what an average hitter does with the same pitches (same location, count and base-out state); 0 = average' },
+  dec100: { k: 'dec100', label: 'Dec RV/100', fmt: v => fmtRV(v, 2), tip: 'Decision run value per 100 pitches seen' },
+  decGood: { k: 'decGood', label: 'Good Dec%', fmt: F.pct, tip: 'Share of pitches where the hitter made the higher-value choice (swing or take)' },
+  decGrade: { k: 'decGrade', label: 'Decision', fmt: v => (v == null ? '—' : Math.round(v)), tip: 'Swing-decision grade on the 20-80 scouting scale (50 = average hitter in this season\'s data, 60 = one SD better), from Dec RV/100' },
   fpSwing: { k: 'fpSwing', label: '1st-Pitch Swing%', fmt: F.pct }, fpStrike: { k: 'fpStrike', label: 'F-Strike%', fmt: F.pct }, csw: { k: 'csw', label: 'CSW%', fmt: F.pct, tip: 'Called strikes + whiffs per pitch' },
   batSpd: { k: 'batSpd', label: 'Bat Speed', fmt: F.f1, tip: 'Average of tracked swings between 50 and 95 mph' }, maxBat: { k: 'maxBat', label: 'Max Bat Spd', fmt: F.f1 },
   ip: { k: 'outs', label: 'IP', fmt: F.ip, tip: 'From TrackMan outs; approximate' }, runs: { k: 'runs', label: 'R', fmt: F.int, tip: 'Runs scored on plays (not earned runs)' },
@@ -483,22 +507,24 @@ const C = {
   blastPct: { k: 'blastPct', label: 'Blast%', fmt: F.pct, tip: 'Contact where squared-up % × 100 + bat speed ≥ 164' },
 };
 const cols = (...ks) => ks.map(k => C[k]);
+function fmtRV(v, nd = 1) { if (v == null || !isFinite(v)) return '—'; const x = +v.toFixed(nd); return (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(nd); }
 const HIT_VIEWS = {
   standard: ['Standard', cols('G', 'PA', 'AB', 'H', '2B', '3B', 'HR', 'BB', 'K', 'HBP', 'avg', 'obp', 'slg', 'ops', 'iso', 'babip', 'woba', 'hitPlus')],
   statcast: ['Batted Ball', cols('PA', 'hitPlus', 'bbe', 'avgEV', 'ev90', 'maxEV', 'avgLA', 'ssPct', 'brl', 'brlPct', 'hhPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff', 'batSpd', 'maxBat')],
-  discipline: ['Plate Discipline', cols('PA', 'pitches', 'kPct', 'bbPct', 'k2win', 'swing', 'zswing', 'chase', 'whiff', 'zcontact', 'contact', 'fpSwing')],
+  discipline: ['Plate Discipline', cols('PA', 'pitches', 'kPct', 'bbPct', 'k2win', 'swing', 'zswing', 'chase', 'whiff', 'zcontact', 'contact', 'fpSwing', 'rv', 'decRV', 'dec100', 'decGood', 'decGrade')],
   profile: ['Batted-Ball Profile', cols('bbe', 'gbPct', 'ldPct', 'fbPct', 'puPct', 'pullPct', 'centPct', 'oppoPct', 'maxDist')],
   bat: ['Bat Tracking', cols('swingsTracked', 'batSpd', 'batTop', 'maxBat', 'fastPct', 'attackAngle', 'idealAA', 'attackDir', 'sqPct', 'blastPct', 'avgEV', 'hhPct')],
 };
 const PIT_VIEWS = {
   standard: ['Standard', cols('G', 'ip', 'PA', 'pitches', 'H', 'HR', 'BB', 'K', 'HBP', 'runs', 'avg', 'obp', 'slg', 'woba', 'kPct', 'bbPct', 'kbb')],
   statcast: ['Contact Allowed', cols('PA', 'bbe', 'avgEV', 'maxEV', 'avgLA', 'brlPct', 'hhPct', 'gbPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff')],
-  stuff: ['Stuff & Command', cols('pitches', 'fbVelo', 'fbMax', 'fbSpin', 'fbIVB', 'ext', 'zone', 'chase', 'whiff', 'csw', 'fpStrike', 'kPct', 'bbPct')],
+  stuff: ['Stuff & Command', cols('pitches', 'fbVelo', 'fbMax', 'fbSpin', 'fbIVB', 'ext', 'zone', 'chase', 'whiff', 'csw', 'fpStrike', 'kPct', 'bbPct', 'rvP')],
 };
 const HIT_PCT = [
   ['Hit+', 'hitPlus', 1, v => Math.round(v)], ['xwOBA', 'xwoba', 1, F.avg], ['xBA', 'xba', 1, F.avg], ['xSLG', 'xslg', 1, F.avg], ['Avg Exit Velo', 'avgEV', 1, F.f1], ['Max Exit Velo', 'maxEV', 1, F.f1],
   ['Barrel %', 'brlPct', 1, F.pct], ['Hard-Hit %', 'hhPct', 1, F.pct], ['Sweet-Spot %', 'ssPct', 1, F.pct], ['Bat Speed', 'batSpd', 1, F.f1],
   ['Chase %', 'chase', -1, F.pct], ['Whiff %', 'whiff', -1, F.pct], ['K %', 'kPct', -1, F.pct], ['BB %', 'bbPct', 1, F.pct],
+  ['Swing Decisions', 'dec100', 1, v => fmtRV(v, 2)],
 ];
 const PIT_PCT = [
   ['xwOBA', 'xwoba', -1, F.avg], ['xBA', 'xba', -1, F.avg], ['Fastball Velo', 'fbVelo', 1, F.f1], ['Avg Exit Velo', 'avgEV', -1, F.f1],
@@ -1396,6 +1422,8 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
       ${hp ? `<p class="muted small" style="margin:8px 0 0"><b>Hit+ ${Math.round(hp.hit)}</b>${Object.keys(hp.groups).filter(g => g !== 'ALL').length ? ' · ' + Object.entries(hp.groups).map(([g, v]) => `${{ FB: 'Fastballs', BR: 'Breaking', OS: 'Offspeed' }[g] || g} ${Math.round(v)}`).join(' · ') : ''} · ${hp.src === 'TruMedia' ? 'from TruMedia' : 'from TrackMan'}, scaled to D1 ${hp.year} (100 = average)</p>` : ''}</div>
     <div class="panel"><div class="panel-h"><h2>Spray chart</h2><span class="note">${esc(se.label)}</span></div><div class="chart-box">${sprayChart(rows)}</div></div>
   </section>
+  ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit')}
+  ${decisionPanel(rows, se, i)}
   <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Batted ball &amp; expected stats</h2></div>${table('t-ph-sc', [sCol, ...HIT_VIEWS.statcast[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   ${all.swingsTracked ? `<section><div class="panel-h"><h2>Bat tracking</h2><span class="note">Only games with bat tracking turned on</span></div>${table('t-ph-bat', [sCol, ...HIT_VIEWS.bat[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>` : ''}
@@ -1461,6 +1489,7 @@ function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
       { k: 'whiff', label: 'Whiff%', fmt: F.pct }, { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'chase', label: 'Chase%', fmt: F.pct }, { k: 'zone', label: 'Zone%', fmt: F.pct },
       { k: 'putaway', label: 'PutAway%', fmt: F.pct }, { k: 'PA', label: 'PA', fmt: F.int }, { k: 'ba', label: 'BA', fmt: F.avg }, { k: 'xba', label: 'xBA', fmt: F.avg }, { k: 'avgEV', label: 'EV', fmt: F.f1 }, { k: 'xwoba', label: 'xwOBA', fmt: F.avg }],
       ars, { sort: 'n' })}</section>
+  ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'pit')}
   <section><div class="panel-h"><h2>Pitching</h2></div>${table('t-pp-std', [sCol, ...PIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Stuff, command &amp; contact</h2></div>${table('t-pp-sc', [sCol, C.fbVelo, C.fbMax, C.fbSpin, C.fbIVB, C.ext, C.zone, C.chase, C.whiff, C.csw, C.fpStrike, C.avgEV, C.hhPct, C.brlPct, C.gbPct, C.xba, C.xwoba], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section class="grid2">
@@ -1594,6 +1623,110 @@ async function pageVideo() {
     ${plist.length ? `<section class="panel"><div class="panel-h"><h2>Player video</h2><span class="note">Bullpens, BP and other clips tagged to a player</span></div>
       ${plist.map(o => `<h3 class="clip-h">${plink(o.i)}</h3>${clipList(o.c, c => c.t || 'Clip')}`).join('')}</section>` : ''}
     ${other.length ? `<section class="panel"><div class="panel-h"><h2>Practice and other video</h2></div>${clipList(other, c => c.t || 'Clip')}</section>` : ''}`;
+}
+
+/* ---------- Swing / Take run value (Savant-style) ---------- */
+const AZ = [
+  { k: 0, name: 'Heart', fill: 'var(--az-heart)', soft: 'var(--az-heart-soft)' },
+  { k: 1, name: 'Shadow', fill: 'var(--az-shadow)', soft: 'var(--az-shadow-soft)' },
+  { k: 2, name: 'Chase', fill: 'var(--az-chase)', soft: 'var(--az-chase-soft)' },
+  { k: 3, name: 'Waste', fill: 'var(--az-waste)', soft: 'var(--az-waste-soft)' },
+];
+// role 'hit': runs for the hitter; role 'pit': runs saved by the pitcher (sign flipped)
+function attackSummary(rows, role) {
+  const sg = role === 'pit' ? -1 : 1;
+  const z = AZ.map(a => ({ ...a, n: 0, sw: 0, tk: 0, rvSw: 0, rvTk: 0, dv: 0, dvN: 0 }));
+  let n = 0;
+  for (const r of rows) {
+    if (r.nt || r.az == null || r.c === 'IB' || r.c === 'U') continue;
+    const o = z[r.az]; o.n++; n++;
+    if (r.sw) { o.sw++; o.rvSw += sg * (r.rv || 0); } else { o.tk++; o.rvTk += sg * (r.rv || 0); }
+    if (r.dv != null) { o.dv += r.dv; o.dvN++; }
+  }
+  return { z, n, rvSw: sum(z.map(o => o.rvSw)), rvTk: sum(z.map(o => o.rvTk)) };
+}
+function swingTakeChart(rows, leagueRows, role, title) {
+  const me = attackSummary(rows, role), lg = attackSummary(leagueRows, role);
+  if (me.n < 20) return '';
+  const tot = me.rvSw + me.rvTk;
+  const runsTxt = v => `${fmtRV(v)} Run${Math.abs(+v.toFixed(1)) === 1 ? '' : 's'}`;
+  // --- zone diagram (catcher's view for hitters, pitcher's view for pitchers; symmetric either way)
+  const W1 = 270, H1 = 330, cx = 135;
+  const box = (hw, hh, fill, cls = '') => `<rect class="${cls}" x="${cx - hw}" y="${165 - hh}" width="${2 * hw}" height="${2 * hh}" fill="${fill}"/>`;
+  const zr = me.z.map(o => o.rvSw + o.rvTk);
+  let g1 = box(128, 152, 'var(--az-waste-soft)') + box(106, 124, 'var(--az-chase-soft)') + box(72, 88, 'var(--az-shadow-soft)') + box(30, 38, 'var(--az-heart-soft)');
+  g1 += `<rect x="${cx - 50}" y="${165 - 60}" width="100" height="120" fill="none" stroke="var(--ink)" stroke-width="3" stroke-dasharray="1 6" stroke-linecap="round"/>`;
+  const lab = (y, t, big) => `<text x="${cx}" y="${y}" text-anchor="middle" class="az-lab${big ? ' big' : ''}">${t}</text>`;
+  g1 += lab(34, runsTxt(zr[3])) + lab(64, runsTxt(zr[2])) + lab(98, runsTxt(zr[1])) + lab(171, runsTxt(zr[0]), 1);
+  g1 += `<text x="${cx}" y="${H1 - 8}" text-anchor="middle" class="az-sub">Strike zone (dotted)</text>`;
+  // --- three blocks: frequency · swing/take · run value (side by side on desktop, stacked on phones)
+  const rowH = 66, top = 44, Hb = top + rowH * 4 + 44;
+  const stripe = (o, y, w) => `<rect x="0" y="${y - 2}" width="5" height="${rowH - 14}" rx="2" fill="${o.fill}"/>`;
+  let gA = `<text x="150" y="20" text-anchor="middle" class="az-h">Pitch frequency</text>`;
+  let gB = `<text x="132" y="20" text-anchor="end" class="az-h">Swing</text><text x="148" y="20" class="az-h">Take</text><line x1="140" x2="140" y1="28" y2="${Hb - 30}" class="az-axis"/>`;
+  let gC = `<text x="135" y="20" text-anchor="middle" class="az-h">Run value</text><line x1="135" x2="135" y1="28" y2="${Hb - 30}" class="az-axis"/>`;
+  const maxRV = Math.max(1, ...me.z.flatMap(o => [Math.abs(o.rvSw), Math.abs(o.rvTk)])), rvK = 82 / maxRV, half = 92, cB = 140, cC = 135;
+  me.z.forEach((o, k) => {
+    const L = lg.z[k], y = top + k * rowH, mid = y + rowH / 2 - 8, pct = me.n ? o.n / me.n : 0, lpct = lg.n ? L.n / lg.n : 0;
+    const swp = o.n ? o.sw / o.n : 0, lsw = L.n ? L.sw / L.n : 0;
+    // A: zone name, count, circle (area ~ share), share (league)
+    gA += `<rect x="0" y="${y - 2}" width="86" height="${rowH - 14}" rx="3" fill="${o.soft}"/><text x="43" y="${mid + 5}" text-anchor="middle" class="az-name">${o.name}</text>
+      <text x="128" y="${mid + 5}" text-anchor="end" class="az-num">${F.int(o.n)}</text>
+      <circle cx="165" cy="${mid}" r="${(5 + 22 * Math.sqrt(pct)).toFixed(1)}" fill="${o.fill}" stroke="var(--ink)" stroke-opacity=".25"/>
+      <text x="200" y="${mid + 5}" class="az-num">${Math.round(pct * 100)}% <tspan class="az-muted">(${Math.round(lpct * 100)}%)</tspan></text>`;
+    // B: swing / take split, player (solid) and league (dashed)
+    const by = y + 10;
+    gB += stripe(o, y) + `<text x="${cB - 4}" y="${by - 3}" text-anchor="end" class="az-tiny">${F.int(o.sw)}</text><text x="${cB + 4}" y="${by - 3}" class="az-tiny">${F.int(o.tk)}</text>
+      <rect x="${cB - half * swp}" y="${by}" width="${half * swp}" height="14" fill="${o.fill}"/><rect x="${cB}" y="${by}" width="${half * (1 - swp)}" height="14" fill="${o.soft}"/>
+      <text x="${cB - half * swp - 4}" y="${by + 11}" text-anchor="end" class="az-num">${Math.round(swp * 100)}%</text><text x="${cB + half * (1 - swp) + 4}" y="${by + 11}" class="az-num">${Math.round((1 - swp) * 100)}%</text>
+      <line x1="${cB - half * lsw}" x2="${cB}" y1="${by + 25}" y2="${by + 25}" class="az-lg-sw"/><line x1="${cB}" x2="${cB + half * (1 - lsw)}" y1="${by + 25}" y2="${by + 25}" class="az-lg-tk"/>
+      <text x="${cB - half * lsw - 4}" y="${by + 29}" text-anchor="end" class="az-tiny az-muted">${Math.round(lsw * 100)}%</text><text x="${cB + half * (1 - lsw) + 4}" y="${by + 29}" class="az-tiny az-muted">${Math.round((1 - lsw) * 100)}%</text>`;
+    // C: swing runs (top bar) and take runs (bottom bar)
+    const bar = (v, yy, cls, label) => {
+      const w = v * rvK, x0 = w >= 0 ? cC : cC + w;
+      return `<rect x="${x0.toFixed(1)}" y="${yy}" width="${Math.abs(w).toFixed(1)}" height="13" class="${cls}"/>
+        <text x="${w >= 0 ? cC - 5 : cC + 5}" y="${yy + 11}" text-anchor="${w >= 0 ? 'end' : 'start'}" class="az-num">${label}${fmtRV(v)}</text>`;
+    };
+    gC += stripe(o, y) + bar(o.rvSw, y + 6, 'az-rv-sw', k === 0 ? 'Swing ' : '') + bar(o.rvTk, y + 27, 'az-rv-tk', k === 0 ? 'Take ' : '');
+  });
+  const yb = top + rowH * 4 + 8;
+  gA += `<text x="150" y="${yb + 10}" text-anchor="middle" class="az-tiny az-muted">${F.int(me.n)} pitches (league in parentheses)</text>`;
+  gB += `<text x="${cB - 4}" y="${yb + 10}" text-anchor="end" class="az-tiny">${F.int(sum(me.z.map(o => o.sw)))}</text><text x="${cB + 4}" y="${yb + 10}" class="az-tiny">${F.int(sum(me.z.map(o => o.tk)))}</text>
+    <line x1="${cB - 70}" x2="${cB - 40}" y1="${yb + 26}" y2="${yb + 26}" class="az-lg-sw"/><text x="${cB - 34}" y="${yb + 30}" class="az-tiny az-muted">League avg</text>`;
+  gC += `<text x="${cC}" y="${yb + 12}" text-anchor="middle" class="az-tot az-sw-t">${fmtRV(me.rvSw)} Swing runs</text>
+    <text x="${cC}" y="${yb + 30}" text-anchor="middle" class="az-tot az-tk-t">${fmtRV(me.rvTk)} Take runs</text>`;
+  return `<section class="panel az-panel"><div class="panel-h"><h2>${esc(title || 'Swing / Take')}</h2>
+      <span class="note">${role === 'pit' ? 'Runs saved by the pitcher' : 'Runs added by the hitter'} · <b class="az-big ${tot >= 0 ? 'pos' : 'neg'}">${fmtRV(tot)} run value</b></span></div>
+    <div class="az-grid"><div class="az-zone">${svg(W1, H1, g1, 'Run value by attack zone')}</div>
+      <div class="az-rows">${svg(290, Hb, gA, 'Pitch frequency by attack zone')}${svg(280, Hb, gB, 'Swing and take rates by attack zone')}${svg(270, Hb, gC, 'Swing and take run value by attack zone')}</div></div>
+    <p class="muted small" style="margin:6px 0 0">Attack zones follow Baseball Savant: heart = middle of the zone, shadow = the edges (about a ball's width in and out), chase = just off the plate, waste = well off it. League = every ${role === 'pit' ? 'pitcher' : 'hitter'} in this season's data. Run values come from the count and base-out run value matrix.</p>
+  </section>`;
+}
+function decisionPanel(rows, se, i) {
+  const st = stats(rows), dp = decisionPool(se);
+  if (!st.decN) return '';
+  const grade = st.dec100 != null && dp.sd ? Math.max(20, Math.min(80, 50 + 10 * (st.dec100 - dp.mean) / dp.sd)) : null;
+  const sm = attackSummary(rows, 'hit');
+  const zrows = sm.z.map(o => {
+    const sw = rows.filter(r => r.az === o.k && r.dv != null && r.sw), tk = rows.filter(r => r.az === o.k && r.dv != null && !r.sw);
+    return { name: o.name, k: o.k, n: o.dvN, swPct: o.n ? o.sw / o.n : null, good: o.dvN ? rows.filter(r => r.az === o.k && r.dg === 1).length / o.dvN : null,
+      swDV: sw.length ? sum(sw.map(r => r.dv)) : 0, tkDV: tk.length ? sum(tk.map(r => r.dv)) : 0, dv: o.dv };
+  });
+  const tile = (v, l, tip) => `<div class="tile"${tip ? ` data-tip="${esc(tip)}"` : ''}><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`;
+  return `<section class="panel"><div class="panel-h"><h2>Swing decisions</h2><span class="note">${F.int(st.decN)} pitches graded · ${esc(se.label)}</span></div>
+    <div class="strip pg-strip" style="margin-bottom:12px">
+      ${tile(grade == null ? '—' : Math.round(grade), 'Decision grade (20–80)', 'Dec RV/100 on the 20–80 scale: 50 = average hitter in this season\'s data, every 10 = one standard deviation')}
+      ${tile(fmtRV(st.decRV), 'Decision runs', 'Runs gained or lost by his swing/take choices compared with what an average hitter does with the same pitches (0 = average)')}
+      ${tile(fmtRV(st.dec100, 2), 'Per 100 pitches')}
+      ${tile(F.pct(st.decGood), 'Good decisions')}
+      ${tile(fmtRV(st.rv), 'Total run value')}
+    </div>
+    ${table('t-dec-' + i, [{ k: 'name', label: 'Zone', l: true, get: r => r.k, html: r => `<span class="az-chip" style="background:${AZ[r.k].soft}">${r.name}</span>` },
+      { k: 'n', label: 'Pitches', fmt: F.int }, { k: 'swPct', label: 'Swing%', fmt: F.pct }, { k: 'good', label: 'Good Dec%', fmt: F.pct },
+      { k: 'swDV', label: 'Swing decisions', fmt: v => fmtRV(v), tip: 'Decision runs on pitches he swung at' }, { k: 'tkDV', label: 'Take decisions', fmt: v => fmtRV(v), tip: 'Decision runs on pitches he took' },
+      { k: 'dv', label: 'Total', fmt: v => fmtRV(v) }], zrows, { nosort: true })}
+    <p class="muted small" style="margin:6px 0 0">Each pitch is valued two ways for an average hitter: swinging (chance of a whiff, foul or ball in play at that location, and what a ball in play there is worth) and taking (chance it's called a strike). Both use the count and base-out state. Each choice is then compared with what an average hitter does with that same pitch (how often hitters swing at that spot in that count), so 0 decision runs = average. It grades the choice, not the result.</p>
+  </section>`;
 }
 
 /* ---------- player game breakdown (pitch by pitch) ---------- */
@@ -1838,6 +1971,9 @@ function pageGlossary() {
     ['CSW %', 'Called strikes plus swinging strikes ÷ pitches.'],
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
+    ['Run Value', 'How many runs each pitch added or took away, from the count and base-out run value matrix (RE288): the change in run expectancy from before the pitch to after it, plus any runs that scored. TrackMan does not record baserunners, so the base state is rebuilt from play results. Hitter pages show runs added by the hitter; pitcher pages show runs saved by the pitcher.'],
+    ['Attack zones', 'Baseball Savant\'s split of the strike zone: Heart (green) is the middle of the zone, Shadow (yellow) the edges, about a ball\'s width in and out, Chase (red) just off the plate and Waste (grey) well off it. Swing runs and take runs add up the run value of the pitches swung at and taken in each zone.'],
+    ['Swing decisions', 'For every pitch, the model estimates the run value of swinging (chance of a whiff, foul or ball in play at that location, and what a ball in play there is usually worth) and of taking (chance it is called a strike), using the count and base-out state. Decision runs compare each choice with what an average hitter does with that same pitch, so 0 = average; it grades the choice, not the result. Good Decisions = share of pitches where he picked the higher-value option. The decision grade puts Decision runs per 100 pitches on the 20–80 scouting scale against every hitter in that season\'s data.'],
     ['Hit+', 'Baseball America\'s hitting-quality metric. Five inputs (contact %, 90th-percentile exit velocity, chase %, barrel % and xwOBA on contact) are measured separately against fastballs, breaking balls and offspeed pitches. Each is regressed toward average by sample size, put on a 100 / 10-SD scale and weighted by how strongly it tracks wOBA, and the three pitch types count equally. Here the scale is set by every D1 hitter in the TruMedia pull, so 100 = D1 average and 110 = one standard deviation better. BC hitters that TruMedia has use TruMedia\'s inputs; fall seasons are scored from TrackMan, lined up with TruMedia using BC hitters who appear in both. Baseball America does not publish its exact weights, so this follows their method rather than copying their numbers.'],
     ['Expected movement (IVB vs x, HB vs x)', 'What a pitch type usually does for pitchers with the same arm slot (release height, release side and extension) and velocity. Each pitch is compared with the 60 most similar pitches of the same type thrown by other pitchers in this site\'s data (BC and opponents, all seasons), with lefties mirrored so both hands share one pool. IVB vs x: + means more carry or less drop than expected. HB vs x is in arm-side terms: + means more arm-side run, − means more glove-side sweep. On the movement chart, dashed rings show the expected spot and a dashed line runs to the actual average.'],
     ['VAA', 'Vertical approach angle: how steeply the pitch enters the zone. Flatter (closer to 0) four-seamers tend to miss more bats.'],
