@@ -850,7 +850,7 @@ def build():
 
     df, forced_bats, bats_report = fix_batter_sides(df)
 
-    for c in ("xivb", "xhb", "rv", "dv", "az", "dg"):
+    for c in ("xivb", "xhb", "rv", "dv", "az", "dg", "xsw"):
         if c not in df.columns:
             df[c] = np.nan
 
@@ -997,6 +997,7 @@ def build():
             "dv": [r(x, 3) for x in sdf["dv"]],
             "az": [r(x, 0) for x in sdf["az"]],
             "dg": [r(x, 0) for x in sdf["dg"]],
+            "xs": [r(x, 3) for x in sdf["xsw"]],
             "xivb": [r(x, 1) for x in sdf["xivb"]],
             "xhb": [r(x, 1) for x in sdf["xhb"]],
             "rh": [r(x, 2) for x in sdf["RelHeight"]],
