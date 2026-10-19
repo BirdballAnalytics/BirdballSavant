@@ -376,3 +376,6 @@ a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85;
 .rvv-pos { color: var(--az-heart); } .rvv-neg { color: var(--az-chase); } .rvv-zero { color: var(--muted); }
 .vm-stage { position: relative; }
 .vm-msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center; color: #fff; background: rgba(0,0,0,.7); padding: 10px 14px; border-radius: 6px; font-size: .9rem; }
+
+.dec-v { font-size: .78rem; font-weight: 700; white-space: nowrap; }
+.dec-v.good, .dec-good { color: var(--az-heart); } .dec-v.bad { color: var(--az-chase); }

@@ -374,13 +374,44 @@ function pitchRV(r) {
   const cls = r.rv >= 0.005 ? 'pos' : r.rv <= -0.005 ? 'neg' : 'zero';
   return { act, zone: AZ_NAME[r.az], k: r.az, rv: r.rv, cls };
 }
-function rvCell(r, role = 'hit') {
-  const v0 = pitchRV(r); if (!v0) return '<td class="l muted">—</td>';
-  const sg = role === 'pit' ? -1 : 1, rv = sg * v0.rv;
-  const v = { ...v0, rv, cls: rv >= 0.005 ? 'pos' : rv <= -0.005 ? 'neg' : 'zero' };
-  const tip = `<b>${v.zone} · ${v.act.toLowerCase()}</b><br>Run value ${fmtRV(v.rv, 3)}${role === 'pit' ? ' for the pitcher' : ''}`
-    + `<br><span class='muted'>Change in run expectancy (count and base-out state) from this pitch, plus any runs scored</span>`;
-  return `<td class="l"><span class="az-chip az-chip-sm" style="background:${AZ[v.k].soft}" data-tip="${esc(tip)}">${v.zone} · ${v.act}</span> <span class="rvv rvv-${v.cls}">${fmtRV(v.rv, 3)}</span></td>`;
+// Good or bad decision (game pages). Judged on the decision, not the outcome: for the pitch's
+// region and count, did the hitter pick the option (swing or take) that is worth more runs on
+// average across this season's data? A good swing that lines out is still a good decision.
+function decisionTable(se) {
+  if (se.cache.decTab) return se.cache.decTab;
+  const t = new Map(), add = (k, v) => { const o = t.get(k) || { n: 0, s: 0 }; o.n++; o.s += v; t.set(k, o); };
+  for (const r of se.rows) {
+    if (!rvUsable(r)) continue;
+    const a = r.sw ? 'S' : 'T';
+    add(`${r.az}|${r.b}-${r.s}|${a}`, r.rv); add(`${r.az}|${r.s === 2 ? '2' : 'x'}|${a}`, r.rv); add(`${r.az}||${a}`, r.rv);
+  }
+  return (se.cache.decTab = t);
+}
+function pitchDecision(se, r) {
+  if (!rvUsable(r)) return null;
+  const t = decisionTable(se), mine = r.sw ? 'S' : 'T', other = r.sw ? 'T' : 'S';
+  let diff = null;
+  for (const c of [`${r.b}-${r.s}`, r.s === 2 ? '2' : 'x', '']) {   // exact count, then 2-strike/not, then zone only
+    const a = t.get(`${r.az}|${c}|${mine}`), b = t.get(`${r.az}|${c}|${other}`);
+    if (a && b && a.n >= 15 && b.n >= 15) { diff = a.s / a.n - b.s / b.n; break; }
+  }
+  if (diff == null) diff = r.az <= 1 ? (r.sw ? 1 : -1) : (r.sw ? -1 : 1);   // no data: swing at strikes, take balls
+  return { good: diff >= -0.003, zone: AZ_NAME[r.az], k: r.az, act: r.sw ? 'Swing' : 'Take' };
+}
+function decisionStats(se, rows) {
+  const d = rows.map(r => pitchDecision(se, r)).filter(Boolean);
+  const good = d.filter(x => x.good).length;
+  return { n: d.length, good, pct: d.length ? good / d.length : null,
+    badSw: d.filter(x => !x.good && x.act === 'Swing').length, badTk: d.filter(x => !x.good && x.act === 'Take').length };
+}
+const decTxt = ds => ds.n ? `${ds.good}/${ds.n}` : '—';
+function decCell(se, r, role = 'hit') {
+  const d = pitchDecision(se, r); if (!d) return '<td class="l muted">—</td>';
+  const chip = `<span class="az-chip az-chip-sm" style="background:${AZ[d.k].soft}">${d.zone} · ${d.act}</span>`;
+  if (role === 'pit') return `<td class="l">${chip}</td>`;
+  const why = d.good ? `${d.act === 'Swing' ? 'Swinging' : 'Taking'} is the better choice on a ${d.zone.toLowerCase()} pitch in a ${r.b}-${r.s} count`
+    : `${d.act === 'Swing' ? 'Taking' : 'Swinging'} would have been the better choice on a ${d.zone.toLowerCase()} pitch in a ${r.b}-${r.s} count`;
+  return `<td class="l">${chip} <span class="dec-v ${d.good ? 'good' : 'bad'}" data-tip="${esc(why)}">${d.good ? '✓ Good' : '✗ Bad'}</span></td>`;
 }
 
 function seasonHitters(se) {
@@ -1234,17 +1265,14 @@ async function pageGame(sid, gi) {
   const intra = !g.opp;
   const gameV = (g.vid || []).length ? vbtn([{ t: `${fmtDate(g.d, true)} ${g.opp ? `BC ${g.home ? 'vs' : '@'} ${teamName(g.opp)}` : 'Intrasquad'} · full game`, clips: g.vid }], 'Full game video', 'btn vbtn-hi') : '';
   const bcBat = lines('h', r => isBC(S.players[r.h].t)), bcPit = lines('p', r => isBC(S.players[r.p].t));
-  bcBat.forEach(o => { o.gDec = rvGrade(se, rows.filter(r => r.h === o.i), true); });
-  const teamDec = rows.filter(r => rvUsable(r) && isBC(S.players[r.h].t));
-  const tSw = sum(teamDec.filter(r => r.sw).map(r => r.rv)), tTk = sum(teamDec.filter(r => !r.sw).map(r => r.rv));
-  const teamDecLine = teamDec.length ? `<span class="note">BC swing/take run value: ${fmtRV(tSw + tTk, 1)} (swing ${fmtRV(tSw, 1)} · take ${fmtRV(tTk, 1)}) · open “Pitch by pitch” for every pitch</span>` : '';
+  bcBat.forEach(o => { o.dec = decisionStats(se, rows.filter(r => r.h === o.i)); o.decPct = o.dec.pct; o.decN = o.dec.good; });
+  const tDec = decisionStats(se, rows.filter(r => isBC(S.players[r.h].t)));
+  const teamDecLine = tDec.n ? `<span class="note">BC good decisions: ${tDec.good} of ${tDec.n} (${F.pct(tDec.pct)}%) · open “Pitch by pitch” for every pitch</span>` : '';
   const bb = rows.filter(r => r.c === 'X' && r.ev != null).sort((a, b) => b.ev - a.ev).slice(0, 15)
     .map(r => ({ i: r.h, name: pname(r.h), ev: r.ev, la: r.la, dist: r.dist, r: r.r, inn: r.inn, pit: r.p, team: S.players[r.h].t }));
   const decCols = rows.some(rvUsable) ? [
-    { k: 'gDec', label: 'Swing/Take', get: r => r.gDec, fmt: v => (v == null ? '—' : Math.round(v)), tip: 'Swing/Take grade for this game on the 20-80 scale: run value per 100 pitches against every hitter-game this season (needs 8+ pitches)' },
-    { k: 'rvSwing', label: 'Swing RV', fmt: v => fmtRV(v, 2), tip: 'Swing runs: run value of the pitches he swung at' },
-    { k: 'rvTake', label: 'Take RV', fmt: v => fmtRV(v, 2), tip: 'Take runs: run value of the pitches he took' },
-    { k: 'rv', label: 'Run Value', fmt: v => fmtRV(v, 2), tip: 'Swing runs + take runs (Baseball Savant run value)' }] : [];
+    { k: 'decN', label: 'Good Dec.', html: r => esc(decTxt(r.dec)), tip: 'Good swing/take decisions out of every pitch he saw' },
+    { k: 'decPct', label: 'Good Dec. %', fmt: F.pct, tip: 'Share of pitches where he made the right swing/take decision for the pitch location and count' }] : [];
   const batCols = [nameCol, C.PA, C.AB, C.H, C['2B'], C.HR, C.BB, C.K, C.bbe, C.avgEV, C.maxEV, { k: 'hh', label: 'Hard Hit', get: r => r.hhPct != null ? Math.round(r.hhPct * r.bbe) : null, fmt: F.int }, C.xwoba, ...decCols];
   const pitCols = [nameCol, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, { k: 'swk', label: 'Whiffs', get: r => r.whiff != null ? Math.round(r.whiff * r.swing * r.pitches) : 0, fmt: F.int }, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba];
   const anyV = rows.some(r => r.vid != null);
@@ -1741,7 +1769,7 @@ function attackSummary(rows, role) {
   }
   return { z, n, rvSw: sum(z.map(o => o.rvSw)), rvTk: sum(z.map(o => o.rvTk)) };
 }
-function swingTakeChart(rows, leagueRows, role, title, minN = 20) {
+function swingTakeChart(rows, leagueRows, role, title, minN = 20, decSe = null) {
   const me = attackSummary(rows, role), lg = attackSummary(leagueRows, role);
   if (me.n < minN) return '';
   const tot = me.rvSw + me.rvTk;
@@ -1753,7 +1781,9 @@ function swingTakeChart(rows, leagueRows, role, title, minN = 20) {
   let g1 = box(128, 152, 'var(--az-waste-soft)') + box(106, 124, 'var(--az-chase-soft)') + box(72, 88, 'var(--az-shadow-soft)') + box(30, 38, 'var(--az-heart-soft)');
   g1 += `<rect x="${cx - 50}" y="${165 - 60}" width="100" height="120" fill="none" stroke="var(--ink)" stroke-width="3" stroke-dasharray="1 6" stroke-linecap="round"/>`;
   const lab = (y, t, big) => `<text x="${cx}" y="${y}" text-anchor="middle" class="az-lab${big ? ' big' : ''}">${t}</text>`;
-  g1 += lab(34, runsTxt(zr[3])) + lab(64, runsTxt(zr[2])) + lab(98, runsTxt(zr[1])) + lab(171, runsTxt(zr[0]), 1);
+  const zd = decSe ? AZ.map(a => decisionStats(decSe, rows.filter(r => r.az === a.k))) : null;
+  const zt = k => (zd ? (zd[k].n ? `${zd[k].good}/${zd[k].n} good` : '—') : runsTxt(zr[k]));
+  g1 += lab(34, zt(3)) + lab(64, zt(2)) + lab(98, zt(1)) + lab(171, zt(0), 1);
   g1 += `<text x="${cx}" y="${H1 - 8}" text-anchor="middle" class="az-sub">Strike zone (dotted)</text>`;
   // --- three blocks: frequency · swing/take · run value (side by side on desktop, stacked on phones)
   const rowH = 66, top = 44, Hb = top + rowH * 4 + 44;
@@ -1792,10 +1822,10 @@ function swingTakeChart(rows, leagueRows, role, title, minN = 20) {
   gC += `<text x="${cC}" y="${yb + 12}" text-anchor="middle" class="az-tot az-sw-t">${fmtRV(me.rvSw)} Swing runs</text>
     <text x="${cC}" y="${yb + 30}" text-anchor="middle" class="az-tot az-tk-t">${fmtRV(me.rvTk)} Take runs</text>`;
   return `<section class="panel az-panel"><div class="panel-h"><h2>${esc(title || 'Swing / Take')}</h2>
-      <span class="note">${role === 'pit' ? 'Runs saved by the pitcher' : 'Runs added by the hitter'} · <b class="az-big ${tot >= 0 ? 'pos' : 'neg'}">${fmtRV(tot)} run value</b></span></div>
-    <div class="az-grid"><div class="az-zone">${svg(W1, H1, g1, 'Run value by attack zone')}</div>
-      <div class="az-rows">${svg(290, Hb, gA, 'Pitch frequency by attack zone')}${svg(280, Hb, gB, 'Swing and take rates by attack zone')}${svg(270, Hb, gC, 'Swing and take run value by attack zone')}</div></div>
-    <p class="muted small" style="margin:6px 0 0">Attack zones follow Baseball Savant: heart = middle of the zone, shadow = the edges (about a ball's width in and out), chase = just off the plate, waste = well off it. League = every ${role === 'pit' ? 'pitcher' : 'hitter'} in this season's data. Run values come from the count and base-out run value matrix.</p>
+      ${decSe ? '' : `<span class="note">${role === 'pit' ? 'Runs saved by the pitcher' : 'Runs added by the hitter'} · <b class="az-big ${tot >= 0 ? 'pos' : 'neg'}">${fmtRV(tot)} run value</b></span>`}</div>
+    <div class="az-grid"><div class="az-zone">${svg(W1, H1, g1, decSe ? 'Good decisions by attack zone' : 'Run value by attack zone')}</div>
+      <div class="az-rows">${svg(290, Hb, gA, 'Pitch frequency by attack zone')}${svg(280, Hb, gB, 'Swing and take rates by attack zone')}${decSe ? '' : svg(270, Hb, gC, 'Swing and take run value by attack zone')}</div></div>
+    <p class="muted small" style="margin:6px 0 0">Attack zones follow Baseball Savant: heart = middle of the zone, shadow = the edges (about a ball's width in and out), chase = just off the plate, waste = well off it. League = every ${role === 'pit' ? 'pitcher' : 'hitter'} in this season's data. ${decSe ? 'Good decisions: swinging or taking, whichever is the better choice for that zone and count.' : 'Run values come from the count and base-out run value matrix.'}</p>
   </section>`;
 }
 function decisionPanel(rows, se, i) {
@@ -1859,7 +1889,7 @@ function seqChart(pitches, catcher = false) {
   });
   return svg(W, H, g, catcher ? 'Pitch sequence, catcher\'s view' : 'Pitch sequence, pitcher\'s view');
 }
-function paCard(pa, role, n) {
+function paCard(se, pa, role, n) {
   const rs = pa.rows, last = rs[rs.length - 1], first = rs[0];
   const opp = role === 'hit' ? first.p : first.h;
   const oppHand = role === 'hit' ? (first.th ? `${first.th}HP` : '') : (first.bs ? `${first.bs}HH` : '');
@@ -1869,15 +1899,14 @@ function paCard(pa, role, n) {
   const vtitle = `${niceName(pname(first.h))} vs ${niceName(pname(first.p))}, ${first.top ? 'Top' : 'Bot'} ${first.inn}`;
   const vq = paQueue(rs, vtitle, role), hasV = rs.some(r => pitchClips(r, role).length);
   const showDec = rs.some(rvUsable);
-  const sg = role === 'pit' ? -1 : 1, us = rs.filter(rvUsable);
-  const paSw = sum(us.filter(r => r.sw).map(r => sg * r.rv)), paTk = sum(us.filter(r => !r.sw).map(r => sg * r.rv));
-  const paDec = showDec ? `<span class="pa-dec small" data-tip="${esc(`<b>Run value this at-bat${role === 'pit' ? ' (saved by the pitcher)' : ''}</b><br>Swing runs ${fmtRV(paSw, 3)} · Take runs ${fmtRV(paTk, 3)}`)}">RV ${fmtRV(paSw + paTk, 2)} <span class="muted">(swing ${fmtRV(paSw, 2)} · take ${fmtRV(paTk, 2)})</span></span>` : '';
+  const pd = showDec && role === 'hit' ? decisionStats(se, rs) : null;
+  const paDec = pd && pd.n ? `<span class="pa-dec small"><b class="${pd.good === pd.n ? 'dec-good' : ''}">${pd.good}/${pd.n}</b> good decisions</span>` : '';
   const rows = rs.map((r, k) => `<tr class="${r.r ? 'pa-end' : ''}">
       <td>${k + 1}</td><td>${r.b}-${r.s}</td>
       <td class="l">${ptDot(r.pt)}${esc(PT[r.pt].n)}</td>
       <td>${F.f1(r.v)}</td><td>${F.int(r.spin)}</td><td>${F.f1(r.ivb)}</td><td>${F.f1(r.hb)}</td>
       <td class="l">${r.iz == null ? '—' : r.iz ? 'Zone' : '<span class="muted">Out</span>'}</td>
-      <td class="l">${r.r ? resBadge(r.r) : esc(CALL_NAME[r.c] || '—')}</td>${showDec ? rvCell(r, role) : ''}
+      <td class="l">${r.r ? resBadge(r.r) : esc(CALL_NAME[r.c] || '—')}</td>${showDec ? decCell(se, r, role) : ''}
       <td>${r.c === 'X' ? F.f1(r.ev) : ''}</td><td>${r.c === 'X' ? F.f1(r.la) : ''}</td><td>${r.c === 'X' ? F.int(r.dist) : ''}</td>
       <td>${r.bat != null && r.sw ? F.f1(r.bat) : ''}</td>${hasV ? `<td>${pitchClips(r, role).length ? vbtn([{ t: `${vtitle} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} · ${pitchDesc(r)}`, clips: pitchClips(r, role) }], '', 'vbtn vbtn-sm') : ''}</td>` : ''}</tr>`).join('');
   return `<article class="pa-card">
@@ -1891,7 +1920,7 @@ function paCard(pa, role, n) {
     </header>
     <div class="pa-body">
       <div class="pa-zone">${seqChart(rs, role === 'hit')}</div>
-      <div class="tbl-wrap pa-tbl"><table><thead><tr><th class="nosort">#</th><th class="nosort">Count</th><th class="l nosort">Pitch</th><th class="nosort">Velo</th><th class="nosort">Spin</th><th class="nosort">IVB</th><th class="nosort">HB</th><th class="l nosort">Loc</th><th class="l nosort">Result</th>${showDec ? `<th class="l nosort" title="Region, swing or take, and the run value of the pitch (Baseball Savant)${role === 'pit' ? '; shown for the hitter' : ''}">Swing / Take RV</th>` : ''}<th class="nosort">EV</th><th class="nosort">LA</th><th class="nosort">Dist</th><th class="nosort">Bat Spd</th>${hasV ? '<th class="nosort">Video</th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="tbl-wrap pa-tbl"><table><thead><tr><th class="nosort">#</th><th class="nosort">Count</th><th class="l nosort">Pitch</th><th class="nosort">Velo</th><th class="nosort">Spin</th><th class="nosort">IVB</th><th class="nosort">HB</th><th class="l nosort">Loc</th><th class="l nosort">Result</th>${showDec ? `<th class="l nosort" title="${role === 'pit' ? 'Where the pitch was (attack zone) and whether the hitter swung' : 'Where the pitch was, swing or take, and whether it was the right decision'}">${role === 'pit' ? 'Zone · Swing/Take' : 'Decision'}</th>` : ''}<th class="nosort">EV</th><th class="nosort">LA</th><th class="nosort">Dist</th><th class="nosort">Bat Spd</th>${hasV ? '<th class="nosort">Video</th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>
     </div>
   </article>`;
 }
@@ -1936,12 +1965,12 @@ async function pagePlayerGame(sid, gi, role, key) {
     tiles = [[`${st.H}-${st.AB}`, 'H-AB'], [F.int(st.PA), 'PA'], [F.int(st.BB + st.HBP), 'BB + HBP'], [F.int(st.K), 'SO'], [F.int(st.pitches), 'Pitches seen'],
       [F.int(Math.round((st.swing || 0) * st.pitches)), 'Swings'], [F.int(Math.round((st.whiff || 0) * (st.swing || 0) * st.pitches)), 'Whiffs'], [F.pct(st.chase), 'Chase %'],
       [F.f1(st.maxEV), 'Max EV'], [F.avg(st.xwoba), 'xwOBA']];
-    const gGrade = rvGrade(se, rows, true);
-    if (st.rvPitches) {
-      decStrip = `<section class="panel dec-panel"><div class="panel-h"><h2>Swing / Take this game</h2><span class="note">Baseball Savant run values · every pitch is listed in the at-bats below</span></div>
-        <div class="strip">${[[gGrade == null ? '—' : Math.round(gGrade), 'Game grade (20–80)'], [fmtRV(st.rv, 2), 'Run value'], [fmtRV(st.rvSwing, 2), 'Swing runs'], [fmtRV(st.rvTake, 2), 'Take runs'],
-          [F.int(st.rvPitches), 'Pitches']].map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div></section>
-        ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit', 'Swing / Take by region', 1)}`;
+    const ds = decisionStats(se, rows);
+    if (ds.n) {
+      decStrip = `<section class="panel dec-panel"><div class="panel-h"><h2>Swing / Take decisions this game</h2><span class="note">Every pitch is listed in the at-bats below</span></div>
+        <div class="strip">${[[F.pct(ds.pct) + "%", "Good decisions"], [`${ds.good}/${ds.n}`, 'Good / pitches'], [F.int(ds.badSw), 'Bad swings'], [F.int(ds.badTk), 'Bad takes']]
+          .map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div></section>
+        ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit', 'Swing / Take by region', 1, se)}`;
     }
     extra = `<section class="grid2">
       <div class="panel"><div class="panel-h"><h2>Pitches seen</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER), true)}</div>
@@ -1965,7 +1994,7 @@ async function pagePlayerGame(sid, gi, role, key) {
     <div class="strip pg-strip">${tiles.map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div>
     ${decStrip}${extra}
     <section><div class="panel-h"><h2>${role === 'hit' ? 'Every at-bat' : 'Every batter faced'}</h2><span class="note">Numbers on the zone match the pitch order · ${role === 'hit' ? 'catcher' : 'pitcher'}'s view · hover a pitch for details</span></div>
-      <div class="pa-list">${pas.map((pa, n) => paCard(pa, role, n + 1)).join('')}</div></section>`;
+      <div class="pa-list">${pas.map((pa, n) => paCard(se, pa, role, n + 1)).join('')}</div></section>`;
 }
 
 function gameLog(rows, se, side) {
@@ -2076,6 +2105,7 @@ function pageGlossary() {
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
     ['Run Value', 'How many runs each pitch added or took away, from the count and base-out run value matrix (RE288): the change in run expectancy from before the pitch to after it, plus any runs that scored. TrackMan does not record baserunners, so the base state is rebuilt from play results. The count matrix is lightly repaired where small samples made it illogical (so a ball never costs the hitter and a strike never helps him), and run expectancy for each base-out state comes from this site\'s games, smoothed so that more runners or fewer outs always means more runs. The Data status page lists every adjustment. Hitter pages show runs added by the hitter; pitcher pages show runs saved by the pitcher.'],
+    ['Good decision', 'Game pages grade every pitch a hitter sees as a good or bad swing/take decision. It judges the decision, not the result: for the pitch\'s attack zone and the count, swinging and taking are each worth a certain number of runs on average across that season\'s data, and the hitter made a good decision if he picked the option worth more. A hard swing at a heart pitch that lines out is still a good decision; chasing a pitch in the dirt is a bad one even if it falls in. Run values stay on season player pages.'],
     ['Attack zones', 'Baseball Savant\'s split of the strike zone: Heart (green) is the middle of the zone, Shadow (yellow) the edges, about a ball\'s width in and out, Chase (red) just off the plate and Waste (grey) well off it. Swing runs and take runs add up the run value of the pitches swung at and taken in each zone.'],
     ['Swing/Take grade', 'Baseball Savant\'s Swing/Take method: every pitch is credited with its run value (what actually happened, from the count and base-out state before and after the pitch, plus runs scored), and those values are added up for swings and takes in each region (heart, shadow, chase, waste). Swing runs + take runs = run value. The grade puts run value per 100 pitches on the 20–80 scale: on player pages against every hitter in that season\'s data with 40+ pitches, and on game pages against every hitter-game with 8+ pitches. On pitch-by-pitch pages each pitch shows its region, swing or take, and its run value (green = good for the hitter, red = bad; on pitcher pages the sign is flipped).'],
     ['Hit+', 'Baseball America\'s hitting-quality metric. Five inputs (contact %, 90th-percentile exit velocity, chase %, barrel % and xwOBA on contact) are measured separately against fastballs, breaking balls and offspeed pitches. Each is regressed toward average by sample size, put on a 100 / 10-SD scale and weighted by how strongly it tracks wOBA, and the three pitch types count equally. Here the scale is set by every D1 hitter in the TruMedia pull, so 100 = D1 average and 110 = one standard deviation better. BC hitters that TruMedia has use TruMedia\'s inputs; fall seasons are scored from TrackMan, lined up with TruMedia using BC hitters who appear in both. Baseball America does not publish its exact weights, so this follows their method rather than copying their numbers.'],
