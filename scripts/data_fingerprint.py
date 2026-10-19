@@ -20,4 +20,10 @@ for f in sorted((d / "video-tm").glob("*.json")) if (d / "video-tm").exists() el
         continue
     if j.get("rows"):
         h.update(f.name.encode() + json.dumps(j["rows"], sort_keys=True, default=str).encode())
+for f in sorted((d / "video-awre").glob("*.json")) if (d / "video-awre").exists() else []:
+    try:
+        j = json.loads(f.read_text())
+    except ValueError:
+        continue
+    h.update(f.name.encode() + str(sum(1 for p in j.get("pitches", []) if p.get("clips"))).encode())
 print(h.hexdigest()[:16])

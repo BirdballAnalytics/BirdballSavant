@@ -317,6 +317,42 @@ def attach(df: pd.DataFrame, root: Path, out_dir: Path, bc_code: str, parse_file
         if raw_rows:
             report["sources"].append(srep)
 
+    # AWRE API (scripts/awre_pull.py): every pitch of every BC game, matched by TrackMan PitchUID
+    awre_dir = out_dir / "video-awre"
+    if awre_dir.exists():
+        srep = {"file": "AWRE API", "rows": 0}
+        for fpath in sorted(awre_dir.glob("*.json")):
+            try:
+                rec = json.loads(fpath.read_text())
+            except ValueError:
+                continue
+            rows = []
+            for p in rec.get("pitches", []):
+                if not p.get("clips"):
+                    continue
+                row = {"PitchUID": p.get("uid") or "", "Date": p.get("date") or rec.get("date") or "",
+                       "Inning": p.get("inn"), "Top/Bottom": p.get("half"), "PAofInning": p.get("pa"),
+                       "PitchofPA": p.get("ppa"), "Batter": p.get("batter"), "Pitcher": p.get("pitcher")}
+                for persp, url, _thumb in p["clips"]:
+                    name = persp if persp != "All" else "All angles"
+                    if url and name not in row:
+                        row[name] = url
+                rows.append(row)
+            if not rows:
+                continue
+            t = pd.DataFrame(rows)
+            for f, clips in clip_rows(t, names):
+                srep["rows"] += 1
+                take(f, clips, "AWRE", None, srep)
+        if srep["rows"]:
+            report["sources"].append(srep)
+        awrep = out_dir / "video-awre-report.json"
+        if awrep.exists():
+            try:
+                report["awre"] = json.loads(awrep.read_text())
+            except ValueError:
+                pass
+
     # AWRE clip lists in data/video/
     vdir = root / "data" / "video"
     if vdir.exists():

@@ -1,0 +1,12 @@
+{
+  "_note": "AWRE video (pitchaware.com API). The API key is the GitHub repository secret AWRE_API_KEY, never this file. Every pitch with video gets a play button on the site, matched to TrackMan by PitchUID. Set enabled to false to stop pulling and take AWRE video off the site.",
+  "enabled": true,
+  "team_id": 73628,
+  "_years": "Calendar years to pull (the current year is always included).",
+  "years": [2025, 2026],
+  "_game_type": "a = all (games, exhibitions and practices); leave out for standard games only; x = exhibitions; p = practices.",
+  "game_type": "a",
+  "_time_limit_minutes": "Each run stops asking AWRE after this long and continues next run (one request per pitch the first time).",
+  "time_limit_minutes": 20,
+  "request_delay_seconds": 0.3
+}
