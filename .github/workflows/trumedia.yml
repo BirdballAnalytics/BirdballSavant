@@ -1,8 +1,8 @@
-name: Pull TruMedia data
+name: Pull TruMedia and AWRE data
 
 # Runs on its own so uploads never wait on TruMedia.
 #  - Every Monday morning: full refresh of NCAA stats (and Hit+).
-#  - Every 2 hours: continue a pull that hit its time limit, and look for new game video.
+#  - Every 2 hours: continue a pull that hit its time limit, and pull new AWRE video.
 #    When there is nothing left to do it finishes in about a minute.
 #  - Run workflow (Actions tab): continue now; tick "Full refresh" to start over.
 #  - Editing scripts/trumedia.json starts a fresh pull.
@@ -22,6 +22,7 @@ on:
     paths:
       - "scripts/trumedia.json"
       - "scripts/video.json"
+      - "scripts/awre.json"
 
 permissions:
   contents: read
@@ -63,6 +64,15 @@ jobs:
           key: video-${{ github.run_id }}
           restore-keys: video-
 
+      - name: Restore saved AWRE video
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            site/data/video-awre
+            site/data/video-awre-report.json
+          key: awre-${{ github.run_id }}
+          restore-keys: awre-
+
       - name: Fingerprint before
         id: before
         run: echo "h=$(python scripts/data_fingerprint.py)" >> "$GITHUB_OUTPUT"
@@ -85,6 +95,23 @@ jobs:
           TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
           TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
         run: python scripts/video_pull.py
+
+      - name: Pull AWRE video
+        timeout-minutes: 25
+        continue-on-error: true
+        env:
+          AWRE_API_KEY: ${{ secrets.AWRE_API_KEY }}
+        run: python scripts/awre_pull.py
+
+      - name: Save AWRE video
+        uses: actions/cache/save@v4
+        if: always() && hashFiles('site/data/video-awre/*.json') != ''
+        continue-on-error: true
+        with:
+          path: |
+            site/data/video-awre
+            site/data/video-awre-report.json
+          key: awre-${{ github.run_id }}
 
       - name: Save TruMedia data
         uses: actions/cache/save@v4
