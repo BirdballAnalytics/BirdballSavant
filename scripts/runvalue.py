@@ -33,7 +33,8 @@ RE24_PRIOR = {
     1: {0: .254, 1: .509, 2: .664, 4: .950, 3: .884, 5: 1.130, 6: 1.376, 7: 1.541},
     2: {0: .098, 1: .224, 2: .319, 4: .353, 3: .429, 5: .478, 6: .580, 7: .752},
 }
-SHRINK = 40          # PAs of weight given to the prior in each base-out state
+SHRINK = 150         # PAs of weight given to the prior in each base-out state
+MIN_RUNNER_GAIN = 0.02   # RE24: adding a runner (same outs) is worth at least this many runs
 HIT_BASES = {"1B": 1, "2B": 2, "3B": 3, "HR": 4, "ROE": 1, "FC": 1}
 
 # Savant attack zones, as a share of the strike zone's half-size (zone incl. ball edge)
@@ -185,8 +186,13 @@ def estimate_re24(df: pd.DataFrame):
                 rows.append((int(o), int(bb), float(rr)))
     t = pd.DataFrame(rows, columns=["outs", "base", "runs"])
     raw = t.groupby(["outs", "base"])["runs"].agg(["mean", "size"])
-    # rescale the prior so its empty/0-out value matches this data's
-    lvl = raw["mean"].get((0, 0), RE24_PRIOR[0][0]) / RE24_PRIOR[0][0] if len(raw) else 1.0
+    # run level of this data vs the prior, using every base-out state (weighted by how often it occurs)
+    if len(raw):
+        num = sum(raw.loc[k, "mean"] * raw.loc[k, "size"] for k in raw.index)
+        den = sum(RE24_PRIOR[k[0]][k[1]] * raw.loc[k, "size"] for k in raw.index)
+        lvl = num / den if den else 1.0
+    else:
+        lvl = 1.0
     re = {}
     for o in (0, 1, 2):
         for bcode in BASE_KEYS:
@@ -196,7 +202,85 @@ def estimate_re24(df: pd.DataFrame):
                 re[(bcode, o)] = (n * m + SHRINK * prior) / (n + SHRINK)
             else:
                 re[(bcode, o)] = prior
-    return re, int(len(t)), float(lvl)
+    re = _monotone_re24(re)
+    counts = {(int(b), int(o)): int(n) for (o, b), n in raw["size"].items()}
+    return re, int(len(t)), float(lvl), counts
+
+
+def _monotone_re24(re):
+    """Small samples can make RE24 illogical (e.g. loading the bases 'losing' runs). Enforce:
+    more runners (same outs) = more runs, more outs (same runners) = fewer runs."""
+    re = dict(re)
+    subsets = [(a, b) for a in BASE_KEYS for b in BASE_KEYS if a != b and (a & b) == a]   # a ⊂ b
+    for _ in range(500):
+        moved = False
+        for o in (0, 1, 2):
+            for a, b in subsets:
+                gap = re[(a, o)] + MIN_RUNNER_GAIN - re[(b, o)]
+                if gap > 1e-9:
+                    re[(a, o)] -= gap / 2; re[(b, o)] += gap / 2; moved = True
+        for bcode in BASE_KEYS:
+            for o in (0, 1):
+                gap = re[(bcode, o + 1)] + 0.01 - re[(bcode, o)]
+                if gap > 1e-9:
+                    re[(bcode, o + 1)] -= gap / 2; re[(bcode, o)] += gap / 2; moved = True
+        if not moved:
+            break
+    return re
+
+
+def _pava(y, increasing=True):
+    """Least-squares monotone fit (pool adjacent violators)."""
+    y = list(y if increasing else [-v for v in y])
+    blocks = [[v, 1] for v in y]
+    i = 0
+    while i < len(blocks) - 1:
+        if blocks[i][0] / blocks[i][1] > blocks[i + 1][0] / blocks[i + 1][1] + 1e-12:
+            blocks[i] = [blocks[i][0] + blocks[i + 1][0], blocks[i][1] + blocks[i + 1][1]]
+            del blocks[i + 1]
+            i = max(i - 1, 0)
+        else:
+            i += 1
+    out = [b[0] / b[1] for b in blocks for _ in range(b[1])]
+    return out if increasing else [-v for v in out]
+
+
+def repair_re288(re288, re24):
+    """Make the count values logical in every base-out state, changing as little as possible:
+      * a ball never lowers the count's value and a strike never raises it
+      * 0-0 stays at 0
+      * ball four is never worth less than nothing (3-ball counts <= value of a walk)
+      * strike three is never worth more than nothing (2-strike counts >= value of a strikeout)
+    Cells that already follow these rules move little or not at all."""
+    fixed, report = {}, {"cells_changed": 0, "max_change": 0.0, "states_changed": [], "biggest": []}
+    for (b, o), tab in re288.items():
+        v = np.array([[tab[f"{bl}-{st}"] for st in range(3)] for bl in range(4)], float)
+        orig = v.copy()
+        walk = _bb_val(re24, b, o)
+        k = _k_val(re24, b, o)
+        for _ in range(200):
+            prev = v.copy()
+            for st in range(3):                       # balls: increasing down each column
+                v[:, st] = _pava(v[:, st], True)
+            for bl in range(4):                       # strikes: decreasing along each row
+                v[bl, :] = _pava(v[bl, :], False)
+            v -= v[0, 0]                              # keep 0-0 at 0
+            v[3, :] = np.minimum(v[3, :], walk - 0.005)
+            v[:, 2] = np.maximum(v[:, 2], k + 0.005)
+            if np.abs(v - prev).max() < 1e-9:
+                break
+        d = np.abs(v - orig)
+        changed = int((d > 0.0005).sum())
+        if changed:
+            report["cells_changed"] += changed
+            report["states_changed"].append(f"{BASE_KEYS[b]} | {o} out")
+            bl, st = np.unravel_index(int(d.argmax()), d.shape)
+            report["biggest"].append((float(d.max()), f"{BASE_KEYS[b]} | {o} out, {bl}-{st}: {orig[bl, st]:+.3f} -> {v[bl, st]:+.3f}"))
+        report["max_change"] = max(report["max_change"], float(d.max()))
+        fixed[(b, o)] = {f"{bl}-{st}": float(v[bl, st]) for bl in range(4) for st in range(3)}
+    report["biggest"] = [t for _, t in sorted(report["biggest"], reverse=True)[:8]]
+    report["max_change"] = round(report["max_change"], 3)
+    return fixed, report
 
 
 # ----------------------------------------------------------------------------
@@ -385,7 +469,9 @@ def add_run_values(df: pd.DataFrame, re_path: Path, log=print):
     re288 = load_re288(re_path)
     tm = df[df["nt"].eq(0)].copy()
     tm = reconstruct_bases(tm)
-    re24, n_pa, lvl = estimate_re24(tm)
+    re24, n_pa, lvl, _counts = estimate_re24(tm)
+    re288, fix = repair_re288(re288, re24)
+    log(f"  run values: matrix repaired ({fix['cells_changed']} of 288 cells adjusted, largest change {fix['max_change']:.3f} runs)")
     rv = pitch_run_values(tm, re288, re24)
     dv, xsw, good = decision_model(tm, re288, re24, rv)
     tm["rv"], tm["dv"], tm["xsw"], tm["dg"] = rv, dv, xsw, good
@@ -394,7 +480,7 @@ def add_run_values(df: pd.DataFrame, re_path: Path, log=print):
         df[c] = np.nan
         df.loc[tm.index, c] = tm[c]
     rep = {"re24": {f"{BASE_KEYS[b]} | {o} out": round(v, 3) for (b, o), v in sorted(re24.items(), key=lambda t: (t[0][1], t[0][0]))},
-           "pa_used": n_pa, "run_level_vs_mlb": round(lvl, 2),
+           "pa_used": n_pa, "run_level_vs_mlb": round(lvl, 2), "matrix_repair": fix,
            "pitches_valued": int(np.isfinite(rv).sum()), "decisions_graded": int(np.isfinite(dv).sum())}
     log(f"  run values: {rep['pitches_valued']:,} pitches valued, {rep['decisions_graded']:,} swing/take decisions graded "
         f"(RE24 from {n_pa:,} PAs; run level {lvl:.2f}x MLB)")
