@@ -1321,7 +1321,14 @@ async function p4Alt(seasonId, side) {
   const year = ncaaYearFor(seasonId); if (year == null) return null;
   const j = await loadNcaa(year); const d = j?.[side]; if (!d) return null;
   const map = j.percentile_map?.[side] || {};
-  const pool = d.list.filter(o => o.p4 && d.qual(o));
+  const p4 = d.list.filter(o => o.p4), pool = p4.filter(o => d.qual(o));
+  if (!pool.length) {   // nothing to rank against yet: fall back to BC and say why
+    const q = j.qualify || {};
+    S.p4Why = !p4.length ? `no Power 4 ${side === 'hitting' ? 'hitters' : 'pitchers'} identified in the ${year} TruMedia data yet (see Data status)`
+      : `none of the ${p4.length} Power 4 ${side === 'hitting' ? 'hitters' : 'pitchers'} in the ${year} TruMedia data reach ${side === 'hitting' ? (q.hitting_PA ?? 100) + ' PA' : (q.pitching_IP ?? 25) + ' IP'}${d.stats.includes(side === 'hitting' ? 'PA' : 'IP') ? '' : ` (TruMedia sent no ${side === 'hitting' ? 'PA' : 'IP'} column)`}`;
+    return null;
+  }
+  S.p4Why = '';
   return { year, n: pool.length, values: k => { const c = map[k]; return c && d.stats.includes(c) ? pool.map(o => o[c]).filter(v => v != null) : null; } };
 }
 
@@ -1432,7 +1439,7 @@ function poolSwitch(hasNcaa) {
   return segmented('pool-sw', [['bc', 'vs BC'], ['p4', 'vs Power 4']], S.pctPool, v => { S.pctPool = v; ls.set('pctPool', v); route(); });
 }
 function poolNote(alt, T, pool, unit, meRow) {
-  return alt ? `vs ${alt.n} qualified Power 4 ${unit === 'PA' ? 'hitters' : 'pitchers'} (TruMedia ${alt.year})` : `vs ${pool.length} qualified BC ${unit === 'PA' ? 'hitters' : 'pitchers'} (${T.q}+ ${unit})${meRow.q ? '' : ' · below qualifying ' + unit + ', shown faded'}`;
+  return alt ? `vs ${alt.n} qualified Power 4 ${unit === 'PA' ? 'hitters' : 'pitchers'} (TruMedia ${alt.year})` : `vs ${pool.length} qualified BC ${unit === 'PA' ? 'hitters' : 'pitchers'} (${T.q}+ ${unit})${meRow.q ? '' : ' · below qualifying ' + unit + ', shown faded'}${S.pctPool === 'p4' && S.p4Why ? ` · Power 4 unavailable: ${esc(S.p4Why)}` : ''}`;
 }
 function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   const se = S.seasons[ui.season], rows = se.byH.get(i) || [], me = stats(rows);
