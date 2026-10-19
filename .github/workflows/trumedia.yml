@@ -1,0 +1,116 @@
+name: Pull TruMedia data
+
+# Runs on its own so uploads never wait on TruMedia.
+#  - Every Monday morning: full refresh of NCAA stats (and Hit+).
+#  - Every 2 hours: continue a pull that hit its time limit, and look for new game video.
+#    When there is nothing left to do it finishes in about a minute.
+#  - Run workflow (Actions tab): continue now; tick "Full refresh" to start over.
+#  - Editing scripts/trumedia.json starts a fresh pull.
+# When it pulls anything new, it starts "Build and publish BirdballSavant" so the site updates.
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+    - cron: "47 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: "Full refresh (start the NCAA pull over instead of continuing)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "scripts/trumedia.json"
+      - "scripts/video.json"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: trumedia
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Restore saved TruMedia data
+        uses: actions/cache/restore@v4
+        with:
+          path: site/data/ncaa-*.json
+          key: trumedia-${{ github.run_id }}
+          restore-keys: trumedia-
+
+      - name: Restore saved video links
+        uses: actions/cache/restore@v4
+        with:
+          path: site/data/video-tm
+          key: video-${{ github.run_id }}
+          restore-keys: video-
+
+      - name: Fingerprint before
+        id: before
+        run: echo "h=$(python scripts/data_fingerprint.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Pull TruMedia NCAA data
+        timeout-minutes: 40
+        continue-on-error: true
+        env:
+          TRUMEDIA_MODE: ${{ (github.event.schedule == '17 9 * * 1' || inputs.full_refresh) && 'refresh' || 'resume' }}
+          TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
+          TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
+          TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
+        run: python scripts/trumedia.py
+
+      - name: Pull AWRE game video links from TruMedia
+        timeout-minutes: 15
+        continue-on-error: true
+        env:
+          TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
+          TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
+          TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
+        run: python scripts/video_pull.py
+
+      - name: Save TruMedia data
+        uses: actions/cache/save@v4
+        if: always() && hashFiles('site/data/ncaa-*.json') != ''
+        continue-on-error: true
+        with:
+          path: site/data/ncaa-*.json
+          key: trumedia-${{ github.run_id }}
+
+      - name: Save video links
+        uses: actions/cache/save@v4
+        if: always() && hashFiles('site/data/video-tm/*.json') != ''
+        continue-on-error: true
+        with:
+          path: site/data/video-tm
+          key: video-${{ github.run_id }}
+
+      - name: Publish the site if anything new came in
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          after=$(python scripts/data_fingerprint.py)
+          if [ "$after" != "${{ steps.before.outputs.h }}" ]; then
+            echo "New TruMedia data; starting the site build"
+            gh workflow run deploy.yml --ref "${{ github.ref_name }}"
+          else
+            echo "Nothing new from TruMedia; site left as is"
+          fi
