@@ -1301,7 +1301,7 @@ async function pageGame(sid, gi) {
   const bcBat = lines('h', r => isBC(S.players[r.h].t)), bcPit = lines('p', r => isBC(S.players[r.p].t));
   bcBat.forEach(o => { o.dec = decisionStats(se, rows.filter(r => r.h === o.i)); o.decPct = o.dec.pct; o.decN = o.dec.good; });
   const tDec = decisionStats(se, rows.filter(r => isBC(S.players[r.h].t)));
-  const teamDecLine = tDec.n ? `<span class="note">BC good decisions: ${tDec.good} of ${tDec.n} (${F.pct(tDec.pct)}%) · open “Pitch by pitch” for every pitch</span>` : '';
+  const teamDecLine = tDec.n ? `<span class="note">BC good decisions: ${tDec.good} of ${tDec.n} (${F.pct(tDec.pct)}%)</span>` : '';
   const bb = rows.filter(r => r.c === 'X' && r.ev != null).sort((a, b) => b.ev - a.ev).slice(0, 15)
     .map(r => ({ i: r.h, name: pname(r.h), ev: r.ev, la: r.la, dist: r.dist, r: r.r, inn: r.inn, pit: r.p, team: S.players[r.h].t }));
   const decCols = rows.some(rvUsable) ? [
@@ -1932,7 +1932,7 @@ function paCard(se, pa, role, n) {
   const res = last.r ? resBadge(last.r) : '<span class="muted small">No result recorded</span>';
   const vtitle = `${niceName(pname(first.h))} vs ${niceName(pname(first.p))}, ${first.top ? 'Top' : 'Bot'} ${first.inn}`;
   const vq = paQueue(rs, vtitle, role), hasV = rs.some(r => pitchClips(r, role).length);
-  const showDec = rs.some(rvUsable);
+  const showDec = false;   // per-pitch decisions are left off the pitch-by-pitch tables
   const pd = showDec && role === 'hit' ? decisionStats(se, rs) : null;
   const paDec = pd && pd.n ? `<span class="pa-dec small"><b class="${pd.good === pd.n ? 'dec-good' : ''}">${pd.good}/${pd.n}</b> good decisions</span>` : '';
   const rows = rs.map((r, k) => `<tr class="${r.r ? 'pa-end' : ''}">
@@ -2001,7 +2001,7 @@ async function pagePlayerGame(sid, gi, role, key) {
       [F.f1(st.maxEV), 'Max EV'], [F.avg(st.xwoba), 'xwOBA']];
     const ds = decisionStats(se, rows);
     if (ds.n) {
-      decStrip = `<section class="panel dec-panel"><div class="panel-h"><h2>Swing / Take decisions this game</h2><span class="note">Every pitch is listed in the at-bats below</span></div>
+      decStrip = `<section class="panel dec-panel"><div class="panel-h"><h2>Swing / Take decisions this game</h2></div>
         <div class="strip">${[[F.pct(ds.pct) + "%", "Good decisions"], [`${ds.good}/${ds.n}`, 'Good / pitches'], [F.int(ds.badSw), 'Bad swings'], [F.int(ds.badTk), 'Bad takes']]
           .map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div></section>
         ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit', 'Swing / Take by region', 1)}`;
