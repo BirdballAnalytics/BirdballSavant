@@ -1620,7 +1620,11 @@ function playHls(v, src, speed, dlg) {
       if (!d.fatal) return;
       console.warn('HLS error', d.type, d.details);
       setTimeout(() => { h.destroy(); if (S.hls === h) S.hls = null; }, 0);   // not inside hls.js's own event
-      fail('This clip couldn\'t be loaded here.');
+      const code = d.response && d.response.code;
+      const why = code === 0 || code === undefined && /Load(Error|TimeOut)/.test(d.details || '') ? 'AWRE\'s server blocked this browser (no CORS permission).'
+        : code === 403 || code === 401 ? 'AWRE refused the link (HTTP ' + code + ' — it may have expired).'
+        : code === 404 ? 'AWRE no longer has this clip (HTTP 404).' : '';
+      fail('This clip couldn\'t be loaded here. ' + why + ' [' + (d.details || d.type) + (code !== undefined ? ' · ' + code : '') + ']');
     });
     h.loadSource(src); h.attachMedia(v);
     h.on(Hls.Events.MANIFEST_PARSED, () => { v.playbackRate = speed; v.play().catch(() => {}); });
