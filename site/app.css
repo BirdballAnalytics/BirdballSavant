@@ -371,3 +371,6 @@ a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85;
 .dec-panel { margin-top: 16px; } .dec-panel .strip { margin: 0; } .dec-panel .tile-l .dec { font-size: .7rem; letter-spacing: 0; text-transform: none; }
 .dec-panel .strip { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 @media (max-width: 760px) { .dec-panel .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.az-chip-sm { font-size: .72rem; padding: 1px 7px; white-space: nowrap; }
+.rvv { font-size: .78rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rvv-pos { color: var(--az-heart); } .rvv-neg { color: var(--az-chase); } .rvv-zero { color: var(--muted); }
