@@ -387,6 +387,32 @@ function decisionTable(se) {
   }
   return (se.cache.decTab = t);
 }
+// The hitter's damage map: xwOBA on contact in each of the 13 zones (the "Damage" heat map on
+// his player page), regressed toward his own overall level so a zone with 2 balls in play
+// doesn't swing the call. League map = every hitter of the same side this season.
+const isDmgBall = r => r.c === 'X' && r.xw != null && r.px != null && !r.nt && r.ht !== 'BU';
+const DMG_K = 8, DMG_RUNS = 0.35;   // regression in balls in play; runs per swing for 1.000 of xwOBAcon
+function damageMaps(se) {
+  if (se.cache.dmg) return se.cache.dmg;
+  const lg = {}, hit = new Map(), add = (o, k, v) => { const c = o[k] || (o[k] = { n: 0, s: 0 }); c.n++; c.s += v; };
+  for (const r of se.rows) {
+    if (!isDmgBall(r)) continue;
+    const z = zone13(-r.px, r.pz), sd = r.bs || 'R';
+    add(lg, sd + z, r.xw); add(lg, sd, r.xw);
+    const h = hit.get(r.h) || {}; add(h, z, r.xw); add(h, 'all', r.xw); add(h, 'lg', 0); hit.set(r.h, h);
+  }
+  return (se.cache.dmg = { lg, hit });
+}
+function hitterDamage(se, r) {
+  const m = damageMaps(se), z = zone13(-r.px, r.pz); if (z == null) return null;
+  const sd = r.bs || 'R', L = m.lg[sd + z], LA = m.lg[sd], H = m.hit.get(r.h) || {};
+  if (!L || !LA || L.n < 10) return null;
+  const lgZ = L.s / L.n, lgAll = LA.s / LA.n;
+  const hisAll = H.all ? (H.all.s + DMG_K * lgAll) / (H.all.n + DMG_K) : lgAll;   // his overall, regressed to league
+  const prior = lgZ + (hisAll - lgAll), hz = H[z];
+  const his = hz ? (hz.s + DMG_K * prior) / (hz.n + DMG_K) : prior;
+  return { z, his, lg: lgZ, n: hz ? hz.n : 0 };
+}
 function pitchDecision(se, r) {
   if (!rvUsable(r)) return null;
   const t = decisionTable(se), mine = r.sw ? 'S' : 'T', other = r.sw ? 'T' : 'S';
@@ -396,7 +422,11 @@ function pitchDecision(se, r) {
     if (a && b && a.n >= 15 && b.n >= 15) { diff = a.s / a.n - b.s / b.n; break; }
   }
   if (diff == null) diff = r.az <= 1 ? (r.sw ? 1 : -1) : (r.sw ? -1 : 1);   // no data: swing at strikes, take balls
-  return { good: diff >= -0.003, zone: AZ_NAME[r.az], k: r.az, act: r.sw ? 'Swing' : 'Take' };
+  const base = diff;
+  // cross-reference his damage map: a hot zone makes swinging worth more, a cold zone less
+  const dm = hitterDamage(se, r);
+  if (dm) diff += (r.sw ? 1 : -1) * DMG_RUNS * (dm.his - dm.lg);
+  return { good: diff >= -0.003, zone: AZ_NAME[r.az], k: r.az, act: r.sw ? 'Swing' : 'Take', dm, flipped: (base >= -0.003) !== (diff >= -0.003) };
 }
 function decisionStats(se, rows) {
   const d = rows.map(r => pitchDecision(se, r)).filter(Boolean);
@@ -409,8 +439,11 @@ function decCell(se, r, role = 'hit') {
   const d = pitchDecision(se, r); if (!d) return '<td class="l muted">—</td>';
   const chip = `<span class="az-chip az-chip-sm" style="background:${AZ[d.k].soft}">${d.zone} · ${d.act}</span>`;
   if (role === 'pit') return `<td class="l">${chip}</td>`;
-  const why = d.good ? `${d.act === 'Swing' ? 'Swinging' : 'Taking'} is the better choice on a ${d.zone.toLowerCase()} pitch in a ${r.b}-${r.s} count`
-    : `${d.act === 'Swing' ? 'Taking' : 'Swinging'} would have been the better choice on a ${d.zone.toLowerCase()} pitch in a ${r.b}-${r.s} count`;
+  const heat = d.dm ? (d.dm.his - d.dm.lg >= 0.04 ? 'hot' : d.dm.his - d.dm.lg <= -0.04 ? 'cold' : 'average') : null;
+  const dmTxt = d.dm ? `<br>His damage there: ${F.avg(d.dm.his)} xwOBA on contact (${heat} zone; league ${F.avg(d.dm.lg)}${d.dm.n ? `, ${d.dm.n} ball${d.dm.n === 1 ? '' : 's'} in play` : ', no balls in play yet'})` : '';
+  const why = (d.good ? `<b>Good ${d.act.toLowerCase()}</b>: ${d.act === 'Swing' ? 'swinging' : 'taking'} is the better choice`
+    : `<b>Bad ${d.act.toLowerCase()}</b>: ${d.act === 'Swing' ? 'taking' : 'swinging'} was the better choice`) + ` on a ${d.zone.toLowerCase()} pitch in a ${r.b}-${r.s} count${dmTxt}`
+    + (d.flipped ? `<br><i>His damage map changed this call</i>` : '');
   return `<td class="l">${chip} <span class="dec-v ${d.good ? 'good' : 'bad'}" data-tip="${esc(why)}">${d.good ? '✓ Good' : '✗ Bad'}</span></td>`;
 }
 
@@ -658,9 +691,10 @@ function zoneChart(rows, metric, side) {
       case 'swing': return st.swing; case 'whiff': return st.whiff;
       case 'xwoba': return st.PA >= 2 ? st.xwoba : null;
       case 'ev': return st.avgEV; case 'ba': return st.AB >= 2 ? st.avg : null;
+      case 'dmg': { const b = list.filter(isDmgBall); return b.length >= 2 ? mean(b.map(r => r.xw)) : null; }
     }
   };
-  const fmt = { pitches: F.int, swing: F.pct, whiff: F.pct, xwoba: F.avg, ev: F.f1, ba: F.avg }[metric];
+  const fmt = { pitches: F.int, swing: F.pct, whiff: F.pct, xwoba: F.avg, ev: F.f1, ba: F.avg, dmg: F.avg }[metric];
   const vals = {}; for (const z of [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14]) vals[z] = val(zs[z]);
   const nums = Object.values(vals).filter(v => v != null);
   const lo = Math.min(...nums), hi = Math.max(...nums);
@@ -1501,7 +1535,7 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   <section><div class="panel-h"><h2>Plate discipline</h2></div>${table('t-ph-pd', [sCol, ...HIT_VIEWS.discipline[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section class="grid2">
     <div class="panel"><div class="panel-h"><h2>Zone profile</h2>
-      <select id="zm" aria-label="Zone metric">${[['xwoba', 'xwOBA'], ['ba', 'Batting avg'], ['ev', 'Avg exit velo'], ['swing', 'Swing %'], ['whiff', 'Whiff %'], ['pitches', 'Pitches seen']].map(([v, l]) => `<option value="${v}" ${ui.zm === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <select id="zm" aria-label="Zone metric">${[['dmg', 'Damage (xwOBA on contact)'], ['xwoba', 'xwOBA'], ['ba', 'Batting avg'], ['ev', 'Avg exit velo'], ['swing', 'Swing %'], ['whiff', 'Whiff %'], ['pitches', 'Pitches seen']].map(([v, l]) => `<option value="${v}" ${ui.zm === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="chart-box" style="max-width:340px" id="zbox">${zoneChart(rows, ui.zm, 'hit')}</div><p class="muted small" style="text-align:center;margin:4px 0 0">Catcher's view · red = better for the hitter</p></div>
     <div class="panel"><div class="panel-h"><h2>Exit velo &amp; launch angle</h2><span class="note">Shaded box = 95+ mph at 8°–32°</span></div>${evlaChart(rows)}
       <div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}</div></div>
@@ -1970,7 +2004,7 @@ async function pagePlayerGame(sid, gi, role, key) {
       decStrip = `<section class="panel dec-panel"><div class="panel-h"><h2>Swing / Take decisions this game</h2><span class="note">Every pitch is listed in the at-bats below</span></div>
         <div class="strip">${[[F.pct(ds.pct) + "%", "Good decisions"], [`${ds.good}/${ds.n}`, 'Good / pitches'], [F.int(ds.badSw), 'Bad swings'], [F.int(ds.badTk), 'Bad takes']]
           .map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('')}</div></section>
-        ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit', 'Swing / Take by region', 1, se)}`;
+        ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit', 'Swing / Take by region', 1)}`;
     }
     extra = `<section class="grid2">
       <div class="panel"><div class="panel-h"><h2>Pitches seen</h2><span class="note">Catcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER), true)}</div>
@@ -2105,7 +2139,7 @@ function pageGlossary() {
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
     ['Run Value', 'How many runs each pitch added or took away, from the count and base-out run value matrix (RE288): the change in run expectancy from before the pitch to after it, plus any runs that scored. TrackMan does not record baserunners, so the base state is rebuilt from play results. The count matrix is lightly repaired where small samples made it illogical (so a ball never costs the hitter and a strike never helps him), and run expectancy for each base-out state comes from this site\'s games, smoothed so that more runners or fewer outs always means more runs. The Data status page lists every adjustment. Hitter pages show runs added by the hitter; pitcher pages show runs saved by the pitcher.'],
-    ['Good decision', 'Game pages grade every pitch a hitter sees as a good or bad swing/take decision. It judges the decision, not the result: for the pitch\'s attack zone and the count, swinging and taking are each worth a certain number of runs on average across that season\'s data, and the hitter made a good decision if he picked the option worth more. A hard swing at a heart pitch that lines out is still a good decision; chasing a pitch in the dirt is a bad one even if it falls in. Run values stay on season player pages.'],
+    ['Good decision', 'Game pages grade every pitch a hitter sees as a good or bad swing/take decision. It judges the decision, not the result. Start: for the pitch\'s attack zone and the count, swinging and taking are each worth a certain number of runs on average across that season\'s data. Then his damage heat map (xwOBA on contact in each zone, on his player page under Zone profile → Damage) adjusts it: where he does more damage than the league, swinging is worth more; where he does less, taking is. Small samples are pulled toward his overall level. He made a good decision if he picked the option worth more for him. Hover a Good/Bad tag to see his damage in that zone.'],
     ['Attack zones', 'Baseball Savant\'s split of the strike zone: Heart (green) is the middle of the zone, Shadow (yellow) the edges, about a ball\'s width in and out, Chase (red) just off the plate and Waste (grey) well off it. Swing runs and take runs add up the run value of the pitches swung at and taken in each zone.'],
     ['Swing/Take grade', 'Baseball Savant\'s Swing/Take method: every pitch is credited with its run value (what actually happened, from the count and base-out state before and after the pitch, plus runs scored), and those values are added up for swings and takes in each region (heart, shadow, chase, waste). Swing runs + take runs = run value. The grade puts run value per 100 pitches on the 20–80 scale: on player pages against every hitter in that season\'s data with 40+ pitches, and on game pages against every hitter-game with 8+ pitches. On pitch-by-pitch pages each pitch shows its region, swing or take, and its run value (green = good for the hitter, red = bad; on pitcher pages the sign is flipped).'],
     ['Hit+', 'Baseball America\'s hitting-quality metric. Five inputs (contact %, 90th-percentile exit velocity, chase %, barrel % and xwOBA on contact) are measured separately against fastballs, breaking balls and offspeed pitches. Each is regressed toward average by sample size, put on a 100 / 10-SD scale and weighted by how strongly it tracks wOBA, and the three pitch types count equally. Here the scale is set by every D1 hitter in the TruMedia pull, so 100 = D1 average and 110 = one standard deviation better. BC hitters that TruMedia has use TruMedia\'s inputs; fall seasons are scored from TrackMan, lined up with TruMedia using BC hitters who appear in both. Baseball America does not publish its exact weights, so this follows their method rather than copying their numbers.'],
