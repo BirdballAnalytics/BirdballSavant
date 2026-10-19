@@ -360,3 +360,14 @@ a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85;
 .chart .az-sw-t { fill: var(--az-sw); } .chart .az-tk-t { fill: var(--az-tk); }
 .az-big { font-size: 1rem; } .az-big.pos { color: var(--good); } .az-big.neg { color: var(--pct-hi); }
 .az-chip { display: inline-block; padding: 1px 8px; border-radius: 3px; color: var(--ink); font-weight: 600; }
+
+/* swing-decision verdicts */
+.dec { display: inline-block; font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.dec-great { background: var(--az-heart); color: #fff; }
+.dec-good { background: var(--az-heart-soft); color: var(--ink); }
+.dec-close { background: var(--az-waste-soft); color: var(--ink); }
+.dec-bad { background: var(--az-chase); color: #fff; }
+.pa-dec { color: var(--muted); white-space: nowrap; }
+.dec-panel { margin-top: 16px; } .dec-panel .strip { margin: 0; } .dec-panel .tile-l .dec { font-size: .7rem; letter-spacing: 0; text-transform: none; }
+.dec-panel .strip { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+@media (max-width: 760px) { .dec-panel .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
