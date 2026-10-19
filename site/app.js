@@ -1554,8 +1554,27 @@ function bindPlayer(i, p, role, ui) {
 /* ---------- video (AWRE / TruMedia links) ---------- */
 // Clips are links only; the video itself streams from AWRE / TruMedia.
 const clipsOf = r => (r.vid != null ? S.seasons[r.sid]?.clips[r.vid] : null) || [];
-const pitchClips = r => clipsOf(r).filter(c => !c.a);
-const paClips = rs => rs.flatMap(r => clipsOf(r).filter(c => c.a));
+// Camera angles shown for a pitch, in this order:
+//   CF · High Home · the open side for the player being viewed
+//   hitters:  LHH Open (lefty) / RHH Open (righty), from the batter's side on that pitch
+//   pitchers: LHP Open (lefty) / RHP Open (righty)
+// Every other angle (broadcast, "All", the other side) is left out; missing angles are skipped.
+function pickAngles(clips, r, role) {
+  const name = c => String(c.l || '').toLowerCase();
+  const isCF = c => /center|\bcf\b/.test(name(c));
+  const isHome = c => /home ?plate|high home|\bhome\b|\bhh\b/.test(name(c)) && !/handed/.test(name(c));
+  const hand = role === 'pit' ? (r.th === 'L' ? 'L' : r.th === 'R' ? 'R' : null) : (r.bs === 'L' ? 'L' : r.bs === 'R' ? 'R' : null);
+  const who = role === 'pit' ? 'pitcher' : 'hitter', ab = role === 'pit' ? 'p' : 'h';
+  const isOpen = c => hand && (new RegExp(`${hand === 'L' ? 'left' : 'right'}[ -]?handed ${who}`).test(name(c)) || new RegExp(`\\b${hand.toLowerCase()}h${ab}\\b`).test(name(c)));
+  const out = [];
+  const add = (test, label, key) => { const c = clips.find(test); if (c) out.push({ ...c, l: label, k: key }); };
+  add(isCF, 'CF', 'cf');
+  add(isHome, 'High Home', 'home');
+  add(isOpen, `${hand}${role === 'pit' ? 'HP' : 'HH'} Open`, 'open');
+  return out;
+}
+const pitchClips = (r, role = 'hit') => pickAngles(clipsOf(r).filter(c => !c.a), r, role);
+const paClips = (rs, role = 'hit') => rs.flatMap(r => pickAngles(clipsOf(r).filter(c => c.a), r, role));
 function vbtn(items, label, cls = 'vbtn') {
   if (!items.length) return '';
   S.vreg = S.vreg || [];
@@ -1563,10 +1582,10 @@ function vbtn(items, label, cls = 'vbtn') {
   return `<button type="button" class="${cls}" data-v="${S.vreg.length - 1}" aria-label="${esc(label || 'Play video')}">${label ? `<span aria-hidden="true">▶</span> ${esc(label)}` : '▶'}</button>`;
 }
 // one queue item per pitch (all camera angles), at-bat clips first
-function paQueue(rs, title) {
-  const out = [], whole = paClips(rs);
+function paQueue(rs, title, role = 'hit') {
+  const out = [], whole = paClips(rs, role);
   if (whole.length) out.push({ t: `${title} · whole at-bat`, clips: whole });
-  rs.forEach((r, k) => { const c = pitchClips(r); if (c.length) out.push({ t: `${title} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} ${r.v != null ? F.f1(r.v) + ' mph' : ''} · ${pitchDesc(r)}`, clips: c }); });
+  rs.forEach((r, k) => { const c = pitchClips(r, role); if (c.length) out.push({ t: `${title} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} ${r.v != null ? F.f1(r.v) + ' mph' : ''} · ${pitchDesc(r)}`, clips: c }); });
   return out;
 }
 function embedOf(u) {
@@ -1577,6 +1596,36 @@ function embedOf(u) {
   if ((m = u.match(/drive\.google\.com\/file\/d\/([\w-]+)/))) return { kind: 'frame', src: `https://drive.google.com/file/d/${m[1]}/preview` };
   return { kind: 'page', src: u };   // AWRE / TruMedia player page
 }
+// AWRE clips are HLS streams (.m3u8): Safari/iPhone play them natively; other browsers use hls.js,
+// loaded the first time a clip is opened.
+const isHls = u => /\.m3u8(\?|#|$)/i.test(u || '');
+let hlsLib = null;
+function loadHls() {
+  if (window.Hls) return Promise.resolve(window.Hls);
+  if (!hlsLib) hlsLib = new Promise((ok, bad) => {
+    const sc = document.createElement('script');
+    sc.src = 'vendor/hls.min.js';   // hls.js 1.5.13 (Apache-2.0), bundled with the site
+    sc.onload = () => ok(window.Hls); sc.onerror = () => { hlsLib = null; bad(new Error('could not load the video player')); };
+    document.head.appendChild(sc);
+  });
+  return hlsLib;
+}
+function playHls(v, src, speed, dlg) {
+  const fail = msg => { const st = $('.vm-stage', dlg); if (st) st.insertAdjacentHTML('beforeend', `<div class="vm-msg">${esc(msg)} Use <b>Open ↗</b> to watch it on AWRE.</div>`); };
+  if (v.canPlayType('application/vnd.apple.mpegurl')) { v.src = src; v.playbackRate = speed; return; }
+  loadHls().then(Hls => {
+    if (!Hls || !Hls.isSupported()) return fail('This browser can\'t play this clip here.');
+    const h = new Hls(); S.hls = h;
+    h.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal) return;
+      console.warn('HLS error', d.type, d.details);
+      setTimeout(() => { h.destroy(); if (S.hls === h) S.hls = null; }, 0);   // not inside hls.js's own event
+      fail('This clip couldn\'t be loaded here.');
+    });
+    h.loadSource(src); h.attachMedia(v);
+    h.on(Hls.Events.MANIFEST_PARSED, () => { v.playbackRate = speed; v.play().catch(() => {}); });
+  }).catch(err => fail(err.message + '.'));
+}
 function openVideo(queue, start = 0) {
   if (!queue.length) return;
   let dlg = $('#vmodal');
@@ -1584,14 +1633,14 @@ function openVideo(queue, start = 0) {
     dlg = document.createElement('dialog'); dlg.id = 'vmodal'; dlg.className = 'vmodal';
     document.body.appendChild(dlg);
     dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
-    dlg.addEventListener('close', () => { dlg.innerHTML = ''; });
+    dlg.addEventListener('close', () => { if (S.hls) { S.hls.destroy(); S.hls = null; } dlg.innerHTML = ''; });
   }
   let at = start;
   const speedKey = 'vspeed', angleKey = 'vangle';
   const draw = () => {
     const item = queue[at], clips = item.clips;
     const want = ls.get(angleKey, null);
-    const ci = Math.max(0, clips.findIndex(c => c.l === want));
+    const ci = Math.max(0, clips.findIndex(c => (c.k || c.l) === want));
     const c = clips[ci], e = embedOf(c.u);
     const speed = +ls.get(speedKey, 1) || 1;
     dlg.innerHTML = `<div class="vm-in">
@@ -1599,10 +1648,10 @@ function openVideo(queue, start = 0) {
         <span class="vm-count muted small">${queue.length > 1 ? `${at + 1} of ${queue.length}` : ''}</span>
         <button type="button" class="vm-x" aria-label="Close">✕</button></div>
       <div class="vm-stage">${e.kind === 'video'
-        ? `<video src="${esc(e.src)}" controls autoplay playsinline preload="auto"></video>`
+        ? (isHls(e.src) ? `<video controls autoplay playsinline preload="auto"></video>` : `<video src="${esc(e.src)}" controls autoplay playsinline preload="auto"></video>`)
         : `<iframe src="${esc(e.src)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`}</div>
       <div class="vm-bar">
-        <div class="vm-angles">${clips.length > 1 ? clips.map((x, k) => `<button type="button" class="chip ${k === ci ? 'on' : ''}" data-angle="${esc(x.l)}">${esc(x.l)}</button>`).join('') : `<span class="muted small">${esc(c.l)}</span>`}</div>
+        <div class="vm-angles">${clips.length > 1 ? clips.map((x, k) => `<button type="button" class="chip ${k === ci ? 'on' : ''}" data-angle="${esc(x.k || x.l)}">${esc(x.l)}</button>`).join('') : `<span class="muted small">${esc(c.l)}</span>`}</div>
         ${e.kind === 'video' ? `<div class="vm-speed">${[0.25, 0.5, 1].map(v => `<button type="button" class="chip ${v === speed ? 'on' : ''}" data-speed="${v}">${v === 1 ? '1×' : v + '×'}</button>`).join('')}</div>` : ''}
         <div class="vm-nav">${queue.length > 1 ? `<button type="button" class="btn" data-step="-1" ${at ? '' : 'disabled'}>‹ Prev</button><button type="button" class="btn" data-step="1" ${at < queue.length - 1 ? '' : 'disabled'}>Next ›</button>` : ''}
           <a class="btn" href="${esc(c.u)}" target="_blank" rel="noopener">Open ↗</a></div>
@@ -1610,6 +1659,8 @@ function openVideo(queue, start = 0) {
       <p class="vm-src muted small">${esc(c.s || '')}${e.kind === 'page' ? ' · if the clip doesn\'t show here, use Open ↗ (you may need to be signed in to ' + esc(c.s === 'TruMedia' ? 'TruMedia' : 'AWRE') + ')' : ''}</p>
     </div>`;
     const v = $('video', dlg);
+    if (S.hls) { S.hls.destroy(); S.hls = null; }
+    if (v && isHls(e.src)) playHls(v, e.src, speed, dlg);
     if (v) {
       v.playbackRate = speed;
       v.addEventListener('ended', () => { if (at < queue.length - 1) { at++; draw(); } });
@@ -1805,7 +1856,7 @@ function paCard(pa, role, n) {
   const bb = rs.find(r => r.c === 'X' && r.ev != null);
   const res = last.r ? resBadge(last.r) : '<span class="muted small">No result recorded</span>';
   const vtitle = `${niceName(pname(first.h))} vs ${niceName(pname(first.p))}, ${first.top ? 'Top' : 'Bot'} ${first.inn}`;
-  const vq = paQueue(rs, vtitle), hasV = rs.some(r => pitchClips(r).length);
+  const vq = paQueue(rs, vtitle, role), hasV = rs.some(r => pitchClips(r, role).length);
   const showDec = rs.some(rvUsable);
   const sg = role === 'pit' ? -1 : 1, us = rs.filter(rvUsable);
   const paSw = sum(us.filter(r => r.sw).map(r => sg * r.rv)), paTk = sum(us.filter(r => !r.sw).map(r => sg * r.rv));
@@ -1817,7 +1868,7 @@ function paCard(pa, role, n) {
       <td class="l">${r.iz == null ? '—' : r.iz ? 'Zone' : '<span class="muted">Out</span>'}</td>
       <td class="l">${r.r ? resBadge(r.r) : esc(CALL_NAME[r.c] || '—')}</td>${showDec ? rvCell(r, role) : ''}
       <td>${r.c === 'X' ? F.f1(r.ev) : ''}</td><td>${r.c === 'X' ? F.f1(r.la) : ''}</td><td>${r.c === 'X' ? F.int(r.dist) : ''}</td>
-      <td>${r.bat != null && r.sw ? F.f1(r.bat) : ''}</td>${hasV ? `<td>${pitchClips(r).length ? vbtn([{ t: `${vtitle} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} · ${pitchDesc(r)}`, clips: pitchClips(r) }], '', 'vbtn vbtn-sm') : ''}</td>` : ''}</tr>`).join('');
+      <td>${r.bat != null && r.sw ? F.f1(r.bat) : ''}</td>${hasV ? `<td>${pitchClips(r, role).length ? vbtn([{ t: `${vtitle} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} · ${pitchDesc(r)}`, clips: pitchClips(r, role) }], '', 'vbtn vbtn-sm') : ''}</td>` : ''}</tr>`).join('');
   return `<article class="pa-card">
     <header class="pa-head">
       <span class="pa-n">${n}</span>
@@ -1859,7 +1910,7 @@ async function pagePlayerGame(sid, gi, role, key) {
   // prev / next games for this player in the season
   const mine = [...new Set((role === 'hit' ? se.byH.get(i) : se.byP.get(i) || []).filter(r => !se.games[r.g].nt).map(r => r.g))].sort((a, b) => a - b);
   const pos = mine.indexOf(gi), prev = mine[pos - 1], next = mine[pos + 1];
-  const allQ = groupPAs(rows).flatMap(pa => paQueue(pa.rows, `${niceName(pname(pa.rows[0].h))} vs ${niceName(pname(pa.rows[0].p))}, ${pa.rows[0].top ? 'Top' : 'Bot'} ${pa.rows[0].inn}`));
+  const allQ = groupPAs(rows).flatMap(pa => paQueue(pa.rows, `${niceName(pname(pa.rows[0].h))} vs ${niceName(pname(pa.rows[0].p))}, ${pa.rows[0].top ? 'Top' : 'Bot'} ${pa.rows[0].inn}`, role));
   const allV = allQ.length ? vbtn(allQ, `Watch all (${allQ.length})`, 'btn vbtn-hi') : '';
   const nav = `<div class="controls">
     ${prev != null ? `<a class="btn" href="#pg-${sid}-${prev}-${role}-${esc(key)}">‹ ${esc(fmtDate(se.games[prev].d))}</a>` : ''}
@@ -2013,7 +2064,7 @@ function pageGlossary() {
     ['CSW %', 'Called strikes plus swinging strikes ÷ pitches.'],
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
-    ['Run Value', 'How many runs each pitch added or took away, from the count and base-out run value matrix (RE288): the change in run expectancy from before the pitch to after it, plus any runs that scored. TrackMan does not record baserunners, so the base state is rebuilt from play results. Hitter pages show runs added by the hitter; pitcher pages show runs saved by the pitcher.'],
+    ['Run Value', 'How many runs each pitch added or took away, from the count and base-out run value matrix (RE288): the change in run expectancy from before the pitch to after it, plus any runs that scored. TrackMan does not record baserunners, so the base state is rebuilt from play results. The count matrix is lightly repaired where small samples made it illogical (so a ball never costs the hitter and a strike never helps him), and run expectancy for each base-out state comes from this site\'s games, smoothed so that more runners or fewer outs always means more runs. The Data status page lists every adjustment. Hitter pages show runs added by the hitter; pitcher pages show runs saved by the pitcher.'],
     ['Attack zones', 'Baseball Savant\'s split of the strike zone: Heart (green) is the middle of the zone, Shadow (yellow) the edges, about a ball\'s width in and out, Chase (red) just off the plate and Waste (grey) well off it. Swing runs and take runs add up the run value of the pitches swung at and taken in each zone.'],
     ['Swing/Take grade', 'Baseball Savant\'s Swing/Take method: every pitch is credited with its run value (what actually happened, from the count and base-out state before and after the pitch, plus runs scored), and those values are added up for swings and takes in each region (heart, shadow, chase, waste). Swing runs + take runs = run value. The grade puts run value per 100 pitches on the 20–80 scale: on player pages against every hitter in that season\'s data with 40+ pitches, and on game pages against every hitter-game with 8+ pitches. On pitch-by-pitch pages each pitch shows its region, swing or take, and its run value (green = good for the hitter, red = bad; on pitcher pages the sign is flipped).'],
     ['Hit+', 'Baseball America\'s hitting-quality metric. Five inputs (contact %, 90th-percentile exit velocity, chase %, barrel % and xwOBA on contact) are measured separately against fastballs, breaking balls and offspeed pitches. Each is regressed toward average by sample size, put on a 100 / 10-SD scale and weighted by how strongly it tracks wOBA, and the three pitch types count equally. Here the scale is set by every D1 hitter in the TruMedia pull, so 100 = D1 average and 110 = one standard deviation better. BC hitters that TruMedia has use TruMedia\'s inputs; fall seasons are scored from TrackMan, lined up with TruMedia using BC hitters who appear in both. Baseball America does not publish its exact weights, so this follows their method rather than copying their numbers.'],
@@ -2031,6 +2082,18 @@ function pageGlossary() {
   app.innerHTML = `<div class="phead"><div><span class="eyebrow">Reference</span><h1>Glossary</h1></div></div>
     <div class="panel prose" style="max-width:none"><dl class="gloss">${g.map(([t, d]) => `<dt>${esc(t)}</dt><dd>${esc(d)}</dd>`).join('')}</dl></div>`;
 }
+function runValueStatus(R) {
+  if (!R || R.error) return R?.error ? `<section class="panel"><div class="panel-h"><h2>Run values</h2></div><p style="margin:0">${esc(R.error)}</p></section>` : '';
+  const f = R.matrix_repair || {}, re = R.re24 || {};
+  const reRows = ['Empty', '1B', '2B', '3B', '1B,2B', '1B,3B', '2B,3B', 'Loaded'].map(b => ({ b, o0: re[`${b} | 0 out`], o1: re[`${b} | 1 out`], o2: re[`${b} | 2 out`] }));
+  return `<section class="panel"><div class="panel-h"><h2>Run values</h2><span class="note">From scripts/re288.csv and ${F.int(R.pa_used)} plate appearances</span></div>
+    <p class="small" style="margin:0 0 8px">${F.int(R.pitches_valued)} pitches valued · run level ${R.run_level_vs_mlb}× MLB.
+      Count matrix: <b>${F.int(f.cells_changed || 0)} of 288 cells adjusted</b> so that a ball never lowers the count's value, a strike never raises it, ball four is never negative and strike three is never positive (largest change ${f.max_change ?? 0} runs; cells that already followed those rules were left alone).</p>
+    ${(f.biggest || []).length ? `<details><summary class="small">Largest adjustments</summary><ul class="small" style="margin:6px 0">${f.biggest.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
+    <details><summary class="small">Run expectancy by base-out state (RE24) used for walks, strikeouts and balls in play</summary>
+      ${table('t-re24', [{ k: 'b', label: 'Bases', l: true }, { k: 'o0', label: '0 out', fmt: F.f2 }, { k: 'o1', label: '1 out', fmt: F.f2 }, { k: 'o2', label: '2 out', fmt: F.f2 }], reRows, { nosort: true })}</details>
+  </section>`;
+}
 function videoStatus(V) {
   const r = V?.report; if (!r) return '';
   if (!r.enabled) return `<section class="panel"><div class="panel-h"><h2>Video</h2></div><p style="margin:0">Turned off in scripts/video.json.</p></section>`;
@@ -2039,6 +2102,7 @@ function videoStatus(V) {
     <p style="margin:0 0 8px"><b>${F.int(r.pitches)}</b> pitches · <b>${F.int(r.pas)}</b> at-bats · <b>${F.int(r.games)}</b> full games · <b>${F.int(r.players)}</b> player clips · <b>${F.int(r.other)}</b> other clips</p>
     ${t ? `<p class="small" style="margin:4px 0"><b>TruMedia</b> (${esc(new Date(t.ran).toLocaleString())}): ${esc(t.status)}${t.request ? ` · request: ${esc(t.request)}` : ''}${(t.attempts || []).length ? `<br><span class="muted">Tried: ${esc(t.attempts.join(' | '))}</span>` : ''}${(t.columns || []).length ? ` · columns returned: ${esc(t.columns.join(', '))}` : ''}${Object.keys(t.errors || {}).length ? `<br><span class="err" style="padding:0">${esc(Object.entries(t.errors).slice(0, 3).map(([g, e]) => g + ': ' + e).join(' | '))}</span>` : ''}</p>
       ${t.sample ? `<details><summary class="small">What TruMedia sent for ${esc(t.sample.gid)}</summary><pre class="small" style="white-space:pre-wrap;word-break:break-all">${esc(JSON.stringify(t.sample, null, 1))}</pre></details>` : ''}` : '<p class="small muted" style="margin:4px 0">TruMedia video has not run yet.</p>'}
+    ${r.awre ? `<p class="small" style="margin:4px 0"><b>AWRE</b> (${esc(new Date(r.awre.ran).toLocaleString())}): ${esc(r.awre.status)} · ${F.int(r.awre.games || 0)} games/sessions on AWRE, ${F.int(r.awre.pitches_with_video || 0)} pitches with video${(r.awre.errors || []).length ? `<br><span class="err" style="padding:0">${esc(r.awre.errors.join(' | '))}</span>` : ''}</p>` : '<p class="small muted" style="margin:4px 0">AWRE video has not run yet.</p>'}
     ${(r.sources || []).map(s => `<p class="small" style="margin:4px 0"><b>${esc(s.file)}</b>: ${s.status ? esc(s.status) : `${F.int(s.rows)} clip rows → ${['pitch', 'pa', 'game', 'player', 'other', 'none'].filter(k => s[k]).map(k => `${F.int(s[k])} ${{ pitch: 'pitches', pa: 'at-bats', game: 'games', player: 'player clips', other: 'other', none: 'not matched' }[k]}`).join(', ')}`}</p>`).join('')}
     ${(r.unmatched || []).length ? `<details><summary class="small">Clips that didn't match (${r.unmatched.length}${r.unmatched.length >= 60 ? '+' : ''})</summary>
       ${table('t-vun', [{ k: 'src', label: 'File', l: true }, { k: 'why', label: 'Why', l: true, html: x => `<span style="white-space:normal">${esc(x.why)}</span>` }, { k: 'row', label: 'Row', l: true, html: x => `<span style="white-space:normal">${esc(Object.entries(x.row).map(([k, v]) => k + ': ' + v).join(' · '))}</span>` }], r.unmatched, { nosort: true })}</details>` : ''}
@@ -2067,6 +2131,7 @@ function pageData() {
     ${Object.entries(m.ncaa.report.years || {}).map(([y, r]) => `<p class="small" style="margin:4px 0"><b>${esc(y)}</b>${r.state ? ` <span class="muted">(${esc(r.state)}${r.state !== 'complete' && (r.steps_done || []).length ? ': ' + esc(r.steps_done.join(', ')) + ' done' : ''})</span>` : ''}: ${r.error ? `<span class="err" style="padding:0">${esc(r.error)}</span>` : ['hitting', 'pitching'].map(sd => r[sd] && !r[sd].rows && (r[sd].attempts || []).length ? `${sd}: nothing pulled · ${esc(r[sd].attempts.join(' | '))}` : r[sd] ? `${sd} ${F.int(r[sd].rows)} players (${F.int(r[sd].power4_rows || 0)} Power 4)${r[sd].query ? ' via ' + esc(r[sd].query) : ''}${r[sd].team_source ? ` · teams from ${esc(r[sd].team_source)}${r[sd].players_with_team != null ? ` (${F.int(r[sd].players_with_team)} placed)` : ''}` : ''}${(r[sd].columns_rejected || []).length ? ` · columns TruMedia didn't recognise: ${esc(r[sd].columns_rejected.join(', '))}` : ''}${r[sd].power4_teams_missing && Object.keys(r[sd].power4_teams_missing).length ? ` · Power 4 teams not matched: ${esc(Object.values(r[sd].power4_teams_missing).flat().join(', '))}` : ''}` : '').filter(Boolean).join('<br>')}${r.hitplus ? `<br>Hit+: ${r.hitplus.error ? `<span class="err" style="padding:0">${esc(r.hitplus.error)}</span>` : `${F.int(r.hitplus.players || 0)} hitters · ${esc(r.hitplus.source || ((r.hitplus.groups || []).join(', ') === 'ALL' ? 'all pitches' : 'by pitch type: ' + (r.hitplus.groups || []).join(', ')))} · inputs: ${esc(Object.entries(r.hitplus.inputs || {}).map(([k, v]) => k + ' = ' + v).join(', '))}`}` : ''}</p>`).join('')}
   </section>` : ''}
   ${videoStatus(m.video)}
+  ${runValueStatus(m.runvalue)}
   ${(m.corrections || []).length ? `<section class="panel"><div class="panel-h"><h2>TrackMan corrections</h2><span class="note">From scripts/corrections.json</span></div>
     ${table('t-corr', [{ k: 'batter', label: 'Batter', l: true }, { k: 'date', label: 'Date', l: true, fmt: v => esc(fmtDate(v, true)) }, { k: 'pitchno', label: 'Pitch #', fmt: F.int }, { k: 'note', label: 'Fix', l: true, html: r => `<span style="white-space:normal">${esc(r.note || '')}</span>` }, { k: 'applied', label: 'Status', l: true, fmt: v => v ? 'Applied' : 'Pitch not found' }], m.corrections, { nosort: true })}</section>` : ''}
   <section class="panel prose" style="max-width:none"><h2 style="margin-bottom:8px">Adding new games</h2>

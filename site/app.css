@@ -374,3 +374,5 @@ a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85;
 .az-chip-sm { font-size: .72rem; padding: 1px 7px; white-space: nowrap; }
 .rvv { font-size: .78rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rvv-pos { color: var(--az-heart); } .rvv-neg { color: var(--az-chase); } .rvv-zero { color: var(--muted); }
+.vm-stage { position: relative; }
+.vm-msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center; color: #fff; background: rgba(0,0,0,.7); padding: 10px 14px; border-radius: 6px; font-size: .9rem; }
