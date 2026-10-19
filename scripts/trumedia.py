@@ -876,9 +876,25 @@ def main():
         for f in OUT.glob("ncaa-*.json"):
             f.unlink()   # turning the pull off also takes TruMedia data off the site
         return finish("disabled in scripts/trumedia.json")
-    # refresh = scheduled Monday run or "Also refresh TruMedia NCAA stats" ticked; resume = any other build
+    # refresh = Monday run or "Full refresh" ticked; resume = continue an unfinished pull;
+    # offline = site builds after an upload: rebuild from saved data, never contact TruMedia
     mode = os.environ.get("TRUMEDIA_MODE", "refresh").strip() or "refresh"
     fp = cfg_fingerprint(cfg)
+    if mode == "offline":
+        p4 = p4_lookup(cfg)
+        n = 0
+        for y in cfg.get("seasons", []):
+            ck = Checkpoint(y, cfg, cfg_fingerprint(cfg), "resume")
+            saved = ck.latest("hitting", kind="df")
+            if saved is None or saved.empty:
+                continue
+            try:
+                publish(y, cfg, p4, ck, json.loads(json.dumps(ck.prog.get("report", {}))))
+                n += 1
+            except Exception as e:
+                log(f"  ! {y}: could not rebuild from saved data ({e})")
+        log(f"TruMedia: rebuilt {n} season(s) from saved data (no TruMedia calls; pulls run in the TruMedia workflow)")
+        return   # keep the last pull's report for the Data status page
     cks = {y: Checkpoint(y, cfg, fp, mode) for y in cfg.get("seasons", [])}
     todo = [y for y, ck in cks.items() if ck.why]
     p4 = p4_lookup(cfg)
