@@ -289,6 +289,9 @@ def pick(df, role):
     return None
 
 
+# AllTeams has teamName = mascot ("Eagles"), location = school ("Boston College"), fullName = "Clemson University"
+TEAM_LOC_COLS = ["location", "schoolName", "school"]
+TEAM_FULL_COLS = ["fullName", "teamFullName"]
 TEAM_NAME_COLS = ["teamName", "newestTeamName", "fullName", "teamFullName", "name", "displayName", "school",
                   "organization", "abbrevName", "teamAbbrevName", "newestTeamAbbrevName"]
 TEAM_ID_COLS = ["teamId", "newestTeamId", "id", "team_id", "TeamId"]
@@ -333,20 +336,29 @@ class TeamLabeler:
         if t is None or t.empty:
             return self.teams
         idc, nc, cc = first_col(t, TEAM_ID_COLS), first_col(t, TEAM_NAME_COLS), first_col(t, CONF_COLS)
+        lc, fc = first_col(t, TEAM_LOC_COLS), first_col(t, TEAM_FULL_COLS)
         lg = next((c for c in t.columns if c.lower() in ("gameleague", "teamleague", "level", "teamlevel", "seasonlevel", "division")), None)
         if lg is not None and t[lg].astype(str).str.upper().eq("D1").any():
             t = t[t[lg].astype(str).str.upper().eq("D1")]
-        self.rep["all_teams_used_columns"] = {"id": idc, "name": nc, "conference": cc}
+        self.rep["all_teams_used_columns"] = {"id": idc, "school": lc, "full name": fc, "mascot": nc, "conference": cc}
         if idc is None:
             return self.teams
         for rec in t.to_dict("records"):
             tid = clean_id(rec.get(idc))
             if tid:
-                self.teams[tid] = {"name": str(rec.get(nc, "") or "") if nc else "",
-                                   "conf": str(rec.get(cc, "") or "") if cc else ""}
+                def val(c):
+                    v = str(rec.get(c) or "").strip() if c else ""
+                    return "" if v.lower() == "nan" else v
+                loc, full, mascot = val(lc), val(fc), val(nc)
+                hit = p4_exact(loc, full, self.p4)
+                self.teams[tid] = {"name": hit[1] if hit else (loc or full or mascot),
+                                   "conf": val(cc) or (hit[0] if hit else ""), "p4": hit}
+        self.rep["power4_teams_in_allteams"] = sorted({v["p4"][1] for v in self.teams.values() if v.get("p4")})
         return self.teams
 
     def is_p4(self, info):
+        if info.get("p4"):
+            return True
         conf = norm(info.get("conf", ""))
         if conf and any(conf == norm(c) or conf.startswith(norm(c) + " ") for c in self.cfg.get("power4", {})):
             return True
@@ -442,6 +454,7 @@ class TeamLabeler:
         df["__teamId"] = tids
         df["__team"] = tids.map(lambda t: teams.get(t, {}).get("name", "") if t else "")
         df["__conf"] = tids.map(lambda t: teams.get(t, {}).get("conf", "") if t else "")
+        df["__p4"] = tids.map(lambda t: teams.get(t, {}).get("p4") if t else None)
         srep["players_with_team"] = int(df["__team"].astype(str).ne("").sum())
         return df
 
@@ -450,7 +463,7 @@ class TeamLabeler:
 NOT_SAME_SCHOOL = {"state", "st", "southern", "tech", "christian", "atlantic", "international", "baptist", "poly",
                    "city", "valley", "commonwealth", "chicago", "omaha", "arlington", "martin", "northern", "eastern",
                    "western", "central", "a", "oh", "ohio", "gulf", "pine", "fort", "san", "rio", "corpus", "upstate",
-                   "wesleyan", "lutheran", "pacific", "coastal", "gwinnett", "southwestern"}
+                   "wesleyan", "lutheran", "pacific", "coastal", "university", "college", "kearney", "gwinnett", "southwestern"}
 TWO_WORD_MASCOTS = {"tar heels", "blue devils", "demon deacons", "golden bears", "yellow jackets", "fighting irish",
                     "crimson tide", "sun devils", "red raiders", "horned frogs", "golden gophers", "fighting illini",
                     "scarlet knights", "nittany lions", "golden eagles", "black knights"}
@@ -477,8 +490,36 @@ def match_p4(name, p4):
     return None
 
 
+def p4_exact(location, full, p4):
+    """Power 4 match for an AllTeams row, exact names only (no prefix guessing): the school
+    name ("Florida State", "Louisiana State"), else the full name ("University of Miami")."""
+    if location:
+        return p4.get(norm(location))
+    f = norm(full)
+    if not f:
+        return None
+    if f in p4:
+        return p4[f]
+    for pre in ("the university of ", "university of "):
+        if f.startswith(pre) and f[len(pre):] in p4:
+            return p4[f[len(pre):]]
+    for suf in (" university", " college"):
+        if f.endswith(suf) and f[:-len(suf)] in p4:
+            return p4[f[:-len(suf)]]
+    return None
+
+
+# Extra spellings TruMedia's AllTeams may use (kept here so trumedia.json, and the saved pull, don't change)
+BUILTIN_ALIASES = {"UCLA": ["California Los Angeles"], "California": ["California Berkeley"], "USC": ["Southern Cal"],
+                   "Miami": ["Miami Florida"], "Ole Miss": ["University of Mississippi"]}
+
+
 def p4_lookup(cfg):
     names = {}
+    for conf, teams in cfg.get("power4", {}).items():
+        for t in teams:
+            for a in BUILTIN_ALIASES.get(t, []):
+                names[norm(a)] = (conf, t)
     for conf, teams in cfg.get("power4", {}).items():
         for t in teams:
             names[norm(t)] = (conf, t)
@@ -517,7 +558,8 @@ def tidy(df: pd.DataFrame, cfg: dict, side: str, p4: dict, report: dict):
                 names = [norm(c)] + [norm(a) for a in aliases.get(c, [])]
                 if any(cr == n or cr.startswith(n + " ") for n in names):
                     conf = c
-        hit = match_p4(team, p4)
+        tagged = rec.get("__p4")
+        hit = tagged if isinstance(tagged, (tuple, list)) and tagged else (None if "__p4" in rec and str(rec.get("__teamId") or "") else match_p4(team, p4))
         if hit:
             conf = conf or hit[0]
             canon = hit[1]
