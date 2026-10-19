@@ -1,7 +1,8 @@
 name: Build and publish BirdballSavant
 
-# Rebuilds the site whenever data (or the site itself) changes on main,
-# and can also be run by hand from the Actions tab.
+# Rebuilds the site whenever data (or the site itself) changes on main. It never contacts
+# TruMedia: it uses the TruMedia data saved by the "Pull TruMedia data" workflow, so an upload
+# is live in a few minutes. That workflow starts this one again whenever it pulls new data.
 on:
   push:
     branches: [main]
@@ -11,13 +12,6 @@ on:
       - "scripts/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
-    inputs:
-      pull_ncaa:
-        description: "Also refresh TruMedia NCAA stats (slower; it runs every Monday anyway)"
-        type: boolean
-        default: false
-  schedule:
-    - cron: "17 9 * * 1"   # every Monday morning: refresh TruMedia data
 
 permissions:
   contents: read
@@ -31,7 +25,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,57 +40,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Restore last TruMedia pull
+      - name: Restore saved TruMedia data
         uses: actions/cache/restore@v4
         with:
           path: site/data/ncaa-*.json
           key: trumedia-${{ github.run_id }}
           restore-keys: trumedia-
 
-      # Runs on every build. Mondays (or "Also refresh TruMedia NCAA stats") start a full refresh;
-      # every other build only continues a pull that hit its time limit, and exits right away if
-      # there is nothing left to do.
-      - name: Pull TruMedia NCAA data
-        timeout-minutes: 40
-        continue-on-error: true
-        env:
-          TRUMEDIA_MODE: ${{ (github.event_name == 'schedule' || inputs.pull_ncaa) && 'refresh' || 'resume' }}
-          TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
-          TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
-          TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
-        run: python scripts/trumedia.py
-
-      - name: Save TruMedia pull for next time
-        uses: actions/cache/save@v4
-        if: always() && hashFiles('site/data/ncaa-*.json') != ''
-        continue-on-error: true
-        with:
-          path: site/data/ncaa-*.json
-          key: trumedia-${{ github.run_id }}
-
-      - name: Restore TruMedia video links
+      - name: Restore saved video links
         uses: actions/cache/restore@v4
         with:
           path: site/data/video-tm
           key: video-${{ github.run_id }}
           restore-keys: video-
 
-      - name: Pull AWRE game video links from TruMedia
-        timeout-minutes: 15
+      - name: Rebuild NCAA pages from saved TruMedia data (no TruMedia calls)
         continue-on-error: true
         env:
-          TRUMEDIA_USERNAME: ${{ secrets.TRUMEDIA_USERNAME }}
-          TRUMEDIA_SITENAME: ${{ secrets.TRUMEDIA_SITENAME }}
-          TRUMEDIA_MASTER_TOKEN: ${{ secrets.TRUMEDIA_MASTER_TOKEN }}
-        run: python scripts/video_pull.py
-
-      - name: Save TruMedia video links for next time
-        uses: actions/cache/save@v4
-        if: always() && hashFiles('site/data/video-tm/*.json') != ''
-        continue-on-error: true
-        with:
-          path: site/data/video-tm
-          key: video-${{ github.run_id }}
+          TRUMEDIA_MODE: offline
+        run: python scripts/trumedia.py
 
       - name: Build data files from everything in data/
         run: python scripts/build.py
