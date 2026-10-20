@@ -1297,7 +1297,16 @@ async function pageGame(sid, gi) {
     return [...m].map(([i, a]) => ({ i, name: pname(i), ...stats(a), ...pitchShape(a) }));
   };
   const intra = !g.opp;
-  const gameV = (g.vid || []).length ? vbtn([{ t: `${fmtDate(g.d, true)} ${g.opp ? `BC ${g.home ? 'vs' : '@'} ${teamName(g.opp)}` : 'Intrasquad'} · full game`, clips: g.vid }], 'Full game video', 'btn vbtn-hi') : '';
+  // every pitch of the game, in order (BC hitters get the hitter angles, BC pitchers the pitcher angles)
+  const everyQ = groupPAs(rows).flatMap(pa => {
+    const f = pa.rows[0], role = g.opp && !isBC(S.players[f.h].t) ? 'pit' : 'hit';
+    const t = `${f.top ? 'Top' : 'Bot'} ${f.inn} · ${niceName(pname(f.h))} vs ${niceName(pname(f.p))}`;
+    const per = pa.rows.map((r, k) => ({ r, k, c: pitchClips(r, role) })).filter(o => o.c.length);
+    if (!per.length) { const whole = paClips(pa.rows, role); return whole.length ? [{ t: `${t} · whole at-bat`, clips: whole }] : []; }
+    return per.map(({ r, k, c }) => ({ t: `${t} · pitch ${k + 1}: ${r.b}-${r.s} ${PT[r.pt]?.n || ''} ${r.v != null ? F.f1(r.v) + ' mph' : ''} · ${pitchDesc(r)}`, clips: c }));
+  });
+  const everyV = everyQ.length ? vbtn(everyQ, `Watch every pitch (${everyQ.length})`, 'btn vbtn-hi') : '';
+  const gameV = everyV + ((g.vid || []).length ? vbtn([{ t: `${fmtDate(g.d, true)} ${g.opp ? `BC ${g.home ? 'vs' : '@'} ${teamName(g.opp)}` : 'Intrasquad'} · full game`, clips: g.vid }], 'Full game video', 'btn vbtn-hi') : '');
   const bcBat = lines('h', r => isBC(S.players[r.h].t)), bcPit = lines('p', r => isBC(S.players[r.p].t));
   bcBat.forEach(o => { o.dec = decisionStats(se, rows.filter(r => r.h === o.i)); o.decPct = o.dec.pct; o.decN = o.dec.good; });
   const tDec = decisionStats(se, rows.filter(r => isBC(S.players[r.h].t)));
@@ -1703,13 +1712,16 @@ function openVideo(queue, start = 0) {
   if (!queue.length) return;
   let dlg = $('#vmodal');
   if (!dlg) {
-    dlg = document.createElement('dialog'); dlg.id = 'vmodal'; dlg.className = 'vmodal';
+    dlg = document.createElement('dialog'); dlg.id = 'vmodal'; dlg.className = 'vmodal'; dlg.tabIndex = -1;
     document.body.appendChild(dlg);
     dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
     dlg.addEventListener('close', () => { if (S.hls) { S.hls.destroy(); S.hls = null; } dlg.innerHTML = ''; });
   }
   let at = start;
   const speedKey = 'vspeed', angleKey = 'vangle';
+  const halves = [];   // [label, first index] for "Top 1", "Bot 1", ... when the queue spans innings
+  queue.forEach((q, k) => { const m = /^(Top|Bot) \d+/.exec(q.t || ''); if (m && (!halves.length || halves[halves.length - 1][0] !== m[0])) halves.push([m[0], k]); });
+  const jump = halves.length > 1;
   const draw = () => {
     const item = queue[at], clips = item.clips;
     const want = ls.get(angleKey, null);
@@ -1718,6 +1730,7 @@ function openVideo(queue, start = 0) {
     const speed = +ls.get(speedKey, 1) || 1;
     dlg.innerHTML = `<div class="vm-in">
       <div class="vm-top"><div class="vm-title">${esc(item.t || 'Video')}</div>
+        ${jump ? `<select class="vm-jump" aria-label="Jump to inning">${halves.map(([l, k], n) => `<option value="${k}" ${k <= at && (halves[n + 1]?.[1] ?? Infinity) > at ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
         <span class="vm-count muted small">${queue.length > 1 ? `${at + 1} of ${queue.length}` : ''}</span>
         <button type="button" class="vm-x" aria-label="Close">✕</button></div>
       <div class="vm-stage">${e.kind === 'video'
@@ -1742,13 +1755,16 @@ function openVideo(queue, start = 0) {
     $$('[data-angle]', dlg).forEach(b => b.onclick = () => { ls.set(angleKey, b.dataset.angle); draw(); });
     $$('[data-speed]', dlg).forEach(b => b.onclick = () => { ls.set(speedKey, b.dataset.speed); draw(); });
     $$('[data-step]', dlg).forEach(b => b.onclick = () => { at = Math.max(0, Math.min(queue.length - 1, at + +b.dataset.step)); draw(); });
+    const jm = $('.vm-jump', dlg); if (jm) jm.onchange = () => { at = +jm.value; draw(); };
+    if (dlg.open && !dlg.contains(document.activeElement)) dlg.focus({ preventScroll: true });   // keep arrow keys working
   };
   dlg.onkeydown = e => {
-    if (e.key === 'ArrowRight' && at < queue.length - 1 && e.target.tagName !== 'VIDEO') { at++; draw(); }
-    if (e.key === 'ArrowLeft' && at > 0 && e.target.tagName !== 'VIDEO') { at--; draw(); }
+    if (e.target.tagName === 'VIDEO' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'ArrowRight' && at < queue.length - 1) { at++; draw(); }
+    if (e.key === 'ArrowLeft' && at > 0) { at--; draw(); }
   };
   draw();
-  if (!dlg.open) dlg.showModal();
+  if (!dlg.open) { dlg.showModal(); dlg.focus({ preventScroll: true }); }   // not the inning menu, so arrow keys step pitches
 }
 function initVideo() {
   document.addEventListener('click', e => {

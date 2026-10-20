@@ -379,3 +379,5 @@ a.plain { color: inherit; } a.plain:hover { text-decoration: none; opacity: .85;
 
 .dec-v { font-size: .78rem; font-weight: 700; white-space: nowrap; }
 .dec-v.good, .dec-good { color: var(--az-heart); } .dec-v.bad { color: var(--az-chase); }
+.vm-jump { margin-left: auto; font: inherit; font-size: .8rem; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line, #444); background: var(--surface-2, #222); color: inherit; }
+.vmodal:focus { outline: none; }
