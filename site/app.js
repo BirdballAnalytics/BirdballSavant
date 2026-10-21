@@ -1020,12 +1020,46 @@ function playerBatCharts(i, se) {
 }
 
 /* ---------- pages ---------- */
+// Home-screen app: everything except Glossary lives under the Hitting or Pitching tab.
+const isApp = () => document.documentElement.classList.contains('standalone');
+const SUBNAV = {
+  hitting: [['hitting', 'Leaderboard'], ['spray', 'Spray chart'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
+  pitching: [['pitching', 'Leaderboard'], ['arsenal', 'Arsenals'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
+};
+const SEC_OF = { hitting: 'hitting', spray: 'hitting', pitching: 'pitching', arsenal: 'pitching' };
+function sectionFor(h) {   // which tab a page belongs to (null = Home / Video / Profile / Glossary)
+  if (SEC_OF[h]) return SEC_OF[h];
+  if (['games', 'search', 'ncaa'].includes(h) || h.startsWith('game-')) return S.section || 'hitting';
+  if (h.startsWith('ncaa-p-')) return h.includes('-pitching-') ? 'pitching' : 'hitting';
+  if (h.startsWith('pg-')) return /-pit-/.test(h) ? 'pitching' : 'hitting';
+  return null;
+}
+function enterSection(sec, page) {   // a sub-tab was tapped: point shared pages at this side
+  S.section = sec; ls.set('section', sec);
+  if (page === 'search') { const f = S.ui.search || (S.ui.search = { pit: '', bat: '', pt: '', call: '', res: '', bs: '', th: '', count: '', minEV: '', team: 'bcp' }); f.team = sec === 'hitting' ? 'bch' : 'bcp'; f.pit = f.bat = ''; }
+  if (page === 'ncaa') S.ncaaSide = sec;
+}
+function drawSubnav(h) {
+  const el = $('#subnav'); if (!el) return;
+  const page = h || 'home', sec = isApp() && SUBNAV[S.section] && (SUBNAV.hitting.concat(SUBNAV.pitching).some(([k]) => k === page)) ? sectionFor(page) : null;
+  if (!sec) { el.hidden = true; el.innerHTML = ''; return; }
+  const items = SUBNAV[sec].filter(([k]) => k !== 'ncaa' || (S.meta.ncaa?.years || []).length);
+  el.innerHTML = items.map(([k, l]) => `<a href="#${k}" data-sec="${sec}" data-page="${k}" class="${k === page ? 'on' : ''}">${l}</a>`).join('');
+  el.hidden = false;
+  const on = $('a.on', el); if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('#subnav a, #tabbar a'); if (!a) return;
+  const sec = a.dataset.sec || (a.dataset.tab === 'hitting' || a.dataset.tab === 'pitching' ? a.dataset.tab : null);
+  if (sec) enterSection(sec, a.dataset.page || a.dataset.tab);
+});
+
 function setNav(r) {
   $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === r));
   // bottom tab bar (home-screen app)
   const h = decodeURIComponent(location.hash.replace(/^#/, '')), me = ls.get('me', null);
   const mine = me && (h === 'player-' + me || (h.startsWith('pg-') && h.endsWith('-' + me)));
-  const tab = h === 'profile' || mine ? 'profile' : !h || h === 'home' ? 'home' : r;
+  const tab = h === 'profile' || mine ? 'profile' : !h || h === 'home' ? 'home' : h === 'video' ? 'video' : sectionFor(h) || r;
   $$('#tabbar a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
 }
 
@@ -1659,6 +1693,7 @@ async function pageNcaa() {
   const years = (S.meta.ncaa?.years || []).map(y => y.year).sort((a, b) => b - a);
   if (!years.length) { app.innerHTML = '<p class="empty">TruMedia data has not been pulled yet. See the Data status page.</p>'; return; }
   const ui = S.ui.ncaa || (S.ui.ncaa = { year: years[0], side: 'hitting', scope: 'p4', team: '', q: '', min: null });
+  if (S.ncaaSide) { ui.side = S.ncaaSide; S.ncaaSide = null; }
   if (!years.includes(ui.year)) ui.year = years[0];
   const j = await loadNcaa(ui.year), d = j[ui.side];
   const opt = (arr, v) => arr.map(([k, l]) => `<option value="${esc(k)}" ${String(v) === String(k) ? 'selected' : ''}>${esc(l)}</option>`).join('');
@@ -2536,6 +2571,9 @@ function initSearch() {
 async function route() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ''));
   S.vreg = [];
+  if (S.section == null) S.section = ls.get('section', 'hitting');
+  { const sec = sectionFor(h || 'home'); if (sec && (SEC_OF[h] || h.startsWith('pg-') || h.startsWith('ncaa-p-'))) S.section = sec; }
+  drawSubnav(h);
   try {
     if (!S.meta.seasons.length) { app.innerHTML = '<p class="empty">No data has been uploaded yet. Add TrackMan files to the data folder of the repository.</p>'; return; }
     if (!h || h === 'home') await pageHome();

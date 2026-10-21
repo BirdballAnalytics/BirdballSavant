@@ -430,3 +430,12 @@ h3.dlt { font-size: .9rem; margin: 10px 0 4px; text-transform: uppercase; letter
 .lb-list .sb { grid-column: 2 / -1; margin-top: -2px; }
 .lb-list li:first-child .vl { color: var(--gold); } html[data-theme="light"] .lb-list li:first-child .vl { color: var(--maroon); }
 .lb-more summary { cursor: pointer; font-size: .82rem; color: var(--muted); padding-top: 6px; }
+
+/* home-screen app: only Glossary stays in the top menu; the rest sits under Hitting / Pitching */
+html.standalone .nav a:not([data-nav="glossary"]) { display: none; }
+.subnav { display: flex; gap: 6px; overflow-x: auto; padding-top: 12px; padding-bottom: 2px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.subnav::-webkit-scrollbar { display: none; }
+.subnav[hidden] { display: none; }
+.subnav a { flex: none; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  font-weight: 600; font-size: .85rem; text-decoration: none; white-space: nowrap; }
+.subnav a.on { background: var(--maroon); border-color: var(--maroon); color: #fff; }
