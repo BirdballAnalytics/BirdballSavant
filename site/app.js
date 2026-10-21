@@ -1229,8 +1229,8 @@ function coachHitting(se) {
   const decAll = T.rows.map(o => ({ i: o.i, d: decisionStats(se, se.byH.get(o.i) || []) })).filter(o => o.d.n >= 40);
   const cards = [
     c32lt ? lbCard('3<2 %', `From the execution chart (${c32lt.a} ÷ ${c32lt.b})${goal[c32lt.key] != null ? ` · goal ${Math.round(goal[c32lt.key] * 100)}%` : ''}`, exList(c32lt), { fmt: pctFmt, sub: frac, min: '3+ chances' }) : noEx('3<2 %'),
-    lbCard('Ratio (K : BB+HBP)', 'Strikeouts per walk or hit-by-pitch. Lower is better', qual.map(o => ({ i: o.i, v: o.BB + o.HBP ? o.K / (o.BB + o.HBP) : (o.K ? Infinity : 0), K: o.K, W: o.BB + o.HBP })),
-      { better: -1, fmt: (v, o) => (v === Infinity ? `${o.K} : 0` : v.toFixed(2)), sub: o => `${o.K} K · ${o.W} BB+HBP`, min: `${MINQ}+ PA` }),
+    lbCard('Ratio (BB+HBP − K)', 'Walks plus hit-by-pitches minus strikeouts. Higher is better: 4 BB/HBP and 0 K = +4', T.rows.filter(o => o.PA > 0).map(o => ({ i: o.i, v: o.BB + o.HBP - o.K, K: o.K, W: o.BB + o.HBP })),
+      { fmt: v => (v > 0 ? '+' + v : v < 0 ? '−' + Math.abs(v) : '0'), sub: o => `${o.W} BB+HBP · ${o.K} K` }),
     lbCard('Hard-hit %', 'Balls in play at 95+ mph', T.rows.filter(o => o.bbe >= 5).map(o => ({ i: o.i, v: o.hhPct, o })), { fmt: pctFmt, sub: x => `${x.o.hh}/${x.o.bbe}`, min: '5+ balls in play' }),
     lbCard('wOBA', 'Weighted on-base average', qual.map(o => ({ i: o.i, v: o.woba, PA: o.PA })), { fmt: F.avg, sub: o => `${o.PA} PA`, min: `${MINQ}+ PA` }),
     c32 ? lbCard('3-2 Win', `From the execution chart (${c32.a} ÷ ${c32.b})${goal[c32.key] != null ? ` · goal ${Math.round(goal[c32.key] * 100)}%` : ''}`, exList(c32), { fmt: pctFmt, sub: frac, min: '3+ chances' }) : noEx('3-2 Win'),
