@@ -10,12 +10,8 @@ on:
       - "data/**"
       - "site/**"
       - "scripts/**"
-      - "plans/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
-  # Picks up PDFs added to a private plans repository (see README, "Development plans").
-  schedule:
-    - cron: "17 * * * *"
 
 permissions:
   contents: read
@@ -28,8 +24,6 @@ concurrency:
 
 jobs:
   build:
-    # the hourly run only matters when plans live in a private repository
-    if: ${{ github.event_name != 'schedule' || vars.PLANS_REPO != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -77,29 +71,6 @@ jobs:
 
       - name: Build data files from everything in data/
         run: python scripts/build.py
-
-      - name: Get development plans from the private plans repository (if set up)
-        if: ${{ vars.PLANS_REPO != '' }}
-        continue-on-error: true
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.PLANS_REPO }}
-          token: ${{ secrets.PLANS_TOKEN }}
-          path: plans-private
-          fetch-depth: 0
-
-      - name: History for plans/ dates (when a PDF was added)
-        if: ${{ vars.PLANS_REPO == '' }}
-        continue-on-error: true
-        run: git fetch --quiet --unshallow --filter=blob:none origin || true
-
-      - name: Publish development plans (locked with each player's code)
-        continue-on-error: true
-        env:
-          PLANS_SECRET: ${{ secrets.PLANS_SECRET }}
-          PLANS_UPLOAD_URL: ${{ vars.PLANS_REPO != '' && format('https://github.com/{0}/upload/main', vars.PLANS_REPO) || format('https://github.com/{0}/upload/main/plans', github.repository) }}
-          PLANS_PUBLISH_URL: https://github.com/${{ github.repository }}/actions/workflows/deploy.yml
-        run: python scripts/plans.py
 
       - uses: actions/configure-pages@v5
 
