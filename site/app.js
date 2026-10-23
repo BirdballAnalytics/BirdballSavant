@@ -1088,6 +1088,7 @@ async function pageProfile() {
     ${latest ? `<a class="btn" href="${esc(latest.href)}">Latest game: ${esc(latest.label)} ›</a>` : ''}
     <button type="button" class="btn" id="me-change">Change</button></div>`);
   $('#me-change').onclick = () => { S.ui.pickProfile = true; route(); };
+  plInsertBox(me);
 }
 function profilePicker(cur) {
   setNav('');
@@ -1104,6 +1105,10 @@ function profilePicker(cur) {
     <input type="search" class="me-q" id="me-q" placeholder="Search your name" autocomplete="off">
     <div class="me-list" id="me-list">${list.map(card).join('') || '<p class="empty">No BC players yet.</p>'}</div>
     ${cur ? `<div class="me-actions"><button type="button" class="btn" id="me-cancel">Keep current profile</button><button type="button" class="btn" id="me-clear">Remove my profile</button></div>` : ''}`;
+  if (PL.on && !PL.session) {
+    $('.phead', app).insertAdjacentHTML('afterend', `<section class="panel pl-panel" id="pl-pick-signin"><div class="panel-h"><h2>Have a sign-in?</h2></div>${plSignInHtml('Sign in with your email to open your profile and the development plans the staff send you. Coaches sign in here too.')}</section>`);
+    plBindSignIn($('#pl-pick-signin'));
+  }
   $('#me-q').oninput = e => { const q = e.target.value.trim().toLowerCase(); $$('#me-list .me-pick').forEach(b => b.hidden = q && !b.dataset.s.includes(q)); };
   $$('.me-pick').forEach(b => b.onclick = () => { ls.set('me', b.dataset.k); S.ui.pickProfile = false; route(); window.scrollTo(0, 0); });
   if (cur) {
@@ -1156,8 +1161,9 @@ async function pageCoach(kind, who) {
   const se = await loadSeason(S.season);
   const head = `<div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · ★ ${who ? esc(who) + ' · ' : ''}${COACH[kind]}</span><h1>${kind === 'hit' ? 'Hitting' : 'Pitching'} dashboard</h1></div>
     <div class="controls">${seasonSelect('co-season', v => { setSeason(v); route(); })}<button type="button" class="btn" id="me-change">Change</button></div></div>`;
-  app.innerHTML = head + (kind === 'hit' ? coachHitting(se) : coachPitching(se));
+  app.innerHTML = head + (PL.on ? '<section class="panel pl-panel" id="plans-coach"><div class="panel-h"><h2>Development plans &amp; feedback</h2></div><p class="muted small">Loading…</p></section>' : '') + (kind === 'hit' ? coachHitting(se) : coachPitching(se));
   $('#me-change').onclick = () => { S.ui.pickProfile = true; route(); };
+  if (PL.on) plCoachBox();
 }
 
 function coachHitting(se) {
@@ -1301,6 +1307,221 @@ function coachPitching(se) {
   ];
   const boards = `<section><div class="panel-h"><h2>Leaderboards</h2><span class="note">${esc(se.label)}</span></div><div class="lb-grid">${cards.join('')}</div></section>`;
   return glance + workload + boards;
+}
+
+/* ---------- Development plans & weekly feedback (PDFs from the staff, via Supabase) ----------
+   Coaches upload a PDF for a player; the player signs in with his email (a 6-digit code is
+   emailed to him) and sees only his own. Who can see what is enforced by the database
+   (scripts/plans-setup.sql), not by this page. Off until site/plans-config.json is filled in. */
+const PL = { on: false, sb: null, session: null, me: null, ready: null, members: null };
+function loadScript(src) {
+  return new Promise((ok, bad) => { const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = () => bad(new Error('could not load ' + src)); document.head.appendChild(sc); });
+}
+function plansInit() {
+  if (PL.ready) return PL.ready;
+  return (PL.ready = (async () => {
+    let cfg; try { cfg = await getJSON('plans-config.json'); } catch { return; }
+    if (!cfg?.supabaseUrl || !cfg?.supabaseAnonKey) return;
+    if (!window.supabase?.createClient) await loadScript('vendor/supabase.min.js');   // supabase-js 2.117.3 (MIT), bundled
+    PL.sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey,
+      { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'bbs-auth' } });
+    PL.on = true;
+    const { data } = await PL.sb.auth.getSession();
+    PL.session = data?.session || null;
+    if (PL.session) await plLoadMember();
+  })().catch(err => { console.warn('Development plans unavailable', err); PL.on = false; }));
+}
+async function plLoadMember() {
+  const email = String(PL.session?.user?.email || '').toLowerCase();
+  const { data } = await PL.sb.from('members').select('*').eq('email', email).maybeSingle();
+  PL.me = data || { email, role: null };
+  // signing in also sets "my profile" on this phone
+  if (data?.role === 'player' && data.player_key && S.pidx.has(data.player_key)) ls.set('me', data.player_key);
+  if (data?.role === 'coach' && COACHES.some(c => c.id === data.coach_id)) ls.set('me', 'coach:' + data.coach_id);
+}
+async function plSignOut() { try { await PL.sb.auth.signOut(); } catch { /* */ } PL.session = null; PL.me = null; PL.members = null; route(); }
+const plWho = () => `<span class="muted small">Signed in as ${esc(PL.me?.name || PL.session?.user?.email || '')} · <button type="button" class="linkbtn pl-out">Sign out</button></span>`;
+function plBindOut(root) { $$('.pl-out', root).forEach(b => b.onclick = plSignOut); }
+
+// Sign-in: email -> 6-digit code (works inside the home-screen app, unlike an emailed link)
+function plSignInHtml(why) {
+  return `<div class="pl-signin"><p class="muted" style="margin:0 0 8px">${why}</p>
+    <form class="pl-form-email"><input type="email" required autocomplete="email" inputmode="email" placeholder="you@bc.edu" aria-label="Email">
+      <button class="btn" type="submit">Email me a code</button></form>
+    <form class="pl-form-code" hidden><input type="text" required inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,8}" maxlength="8" placeholder="6-digit code" aria-label="Code">
+      <button class="btn" type="submit">Sign in</button> <button class="linkbtn pl-back" type="button">Use a different email</button></form>
+    <p class="pl-msg small"></p></div>`;
+}
+function plBindSignIn(root) {
+  const fe = $('.pl-form-email', root), fc = $('.pl-form-code', root), msg = $('.pl-msg', root); if (!fe) return;
+  let email = '';
+  const say = (t, bad) => { msg.textContent = t; msg.classList.toggle('err-t', !!bad); };
+  fe.onsubmit = async e => {
+    e.preventDefault(); email = $('input', fe).value.trim().toLowerCase(); if (!email) return;
+    const b = $('button', fe); b.disabled = true; say('Sending…');
+    const { error } = await PL.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+    b.disabled = false;
+    if (error) return say(/rate|security purposes|too many/i.test(error.message) ? 'Too many codes requested. Wait a few minutes and try again.' : error.message, true);
+    fe.hidden = true; fc.hidden = false; $('input', fc).focus(); say(`We emailed a code to ${email}. It can take a minute; check junk mail too.`);
+  };
+  fc.onsubmit = async e => {
+    e.preventDefault(); const token = $('input', fc).value.trim(); const b = $('button', fc); b.disabled = true; say('Checking…');
+    const { data, error } = await PL.sb.auth.verifyOtp({ email, token, type: 'email' });
+    b.disabled = false;
+    if (error || !data?.session) return say('That code didn\'t work. Check it, or request a new one.', true);
+    PL.session = data.session; await plLoadMember(); S.ui.pickProfile = false; route();
+  };
+  $('.pl-back', fc).onclick = () => { fc.hidden = true; fe.hidden = false; say(''); };
+}
+
+const PL_KIND = { plan: 'Development plan', feedback: 'Weekly feedback' };
+async function plSigned(rows) {   // private PDF -> link that works for an hour
+  const paths = rows.map(r => r.file_path); if (!paths.length) return {};
+  const { data } = await PL.sb.storage.from('plans').createSignedUrls(paths, 3600);
+  return Object.fromEntries((data || []).filter(d => d.signedUrl).map(d => [d.path, d.signedUrl]));
+}
+function plItem(r, url, opts = {}) {
+  const meta = [r.week ? `Week of ${fmtDate(r.week)}` : '', r.coach_name || '', `sent ${fmtDate(String(r.created_at).slice(0, 10))}`].filter(Boolean).join(' · ');
+  const unread = !r.read_at;
+  return `<li class="pl-item${unread && opts.player ? ' unread' : ''}" data-id="${esc(r.id)}">
+    <a class="pl-open" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : 'aria-disabled="true"'}>
+      <span class="pl-ico" aria-hidden="true">PDF</span>
+      <span class="pl-txt">${opts.who ? `<span class="pl-who">${opts.who}</span>` : ''}<b>${esc(r.title)}</b><span class="pl-kind k-${esc(r.kind)}">${PL_KIND[r.kind] || r.kind}</span><span class="muted small">${esc(meta)}</span>${opts.coach ? `<span class="pl-read small ${unread ? 'muted' : 'seen'}">${unread ? 'Not opened yet' : `✓ Opened ${fmtDate(String(r.read_at).slice(0, 10))}`}</span>` : ''}</span>
+      ${opts.player && unread ? '<span class="pl-new">New</span>' : ''}</a>
+    ${opts.coach ? '<button type="button" class="linkbtn pl-del">Delete</button>' : ''}</li>`;
+}
+
+// Player's plans (his own Profile; coaches also see them on any player page)
+function plInsertBox(key) {
+  if (!PL.on) return;
+  const after = $('.me-bar', app) || $('.phead', app) || app.firstElementChild;
+  if (!after || $('#plans-box', app)) return;
+  after.insertAdjacentHTML('afterend', '<section class="panel pl-panel" id="plans-box"><div class="panel-h"><h2>Development plans</h2></div><p class="muted small">Loading…</p></section>');
+  plPlayerBox(key);
+}
+async function plPlayerBox(key) {
+  const box = $('#plans-box'); if (!box) return;
+  const head = extra => `<div class="panel-h"><h2>Development plans</h2>${extra || ''}</div>`;
+  if (!PL.session) { box.innerHTML = head() + plSignInHtml('Sign in with your email to see the development plans and weekly feedback the staff send you.'); plBindSignIn(box); return; }
+  const role = PL.me?.role;
+  if (!role) { box.innerHTML = head(plWho()) + `<p style="margin:0">This email isn't on the team list yet. Ask a coach to add <b>${esc(PL.session.user.email)}</b> to your player.</p>`; plBindOut(box); return; }
+  if (role === 'player' && PL.me.player_key !== key) { box.remove(); return; }
+  const { data, error } = await PL.sb.from('plans').select('*').eq('player_key', key).order('created_at', { ascending: false });
+  if (!$('#plans-box')) return;
+  if (error) { box.innerHTML = head(plWho()) + `<p class="err">Couldn't load plans: ${esc(error.message)}</p>`; plBindOut(box); return; }
+  const urls = await plSigned(data);
+  const player = role === 'player';
+  box.innerHTML = head(plWho()) + (data.length ? `<ul class="pl-list">${data.map(r => plItem(r, urls[r.file_path], { player, coach: !player })).join('')}</ul>`
+    : `<p class="muted" style="margin:0">${player ? 'Nothing from the staff yet. Plans and weekly feedback show up here.' : 'Nothing sent to this player yet.'}</p>`)
+    + (!player ? `<p class="small" style="margin:8px 0 0"><a href="#profile">Send one from your dashboard ›</a></p>` : '');
+  plBindOut(box);
+  if (player) $$('.pl-item.unread .pl-open', box).forEach(a => a.addEventListener('click', () => {
+    const li = a.closest('.pl-item'); li.classList.remove('unread'); $('.pl-new', li)?.remove();
+    PL.sb.rpc('mark_read', { plan_id: li.dataset.id }).then(() => {}, () => {});
+  }));
+  if (!player) plBindDelete(box, () => plPlayerBox(key));
+}
+function plBindDelete(root, after) {
+  $$('.pl-del', root).forEach(b => b.onclick = async () => {
+    if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Tap again to delete'; setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = 'Delete'; } }, 4000); return; }
+    const li = b.closest('.pl-item'); b.disabled = true; b.textContent = 'Deleting…';
+    const { data: row } = await PL.sb.from('plans').select('file_path').eq('id', li.dataset.id).maybeSingle();
+    const { error } = await PL.sb.from('plans').delete().eq('id', li.dataset.id);
+    if (error) { b.textContent = 'Couldn\'t delete'; return; }
+    if (row?.file_path) await PL.sb.storage.from('plans').remove([row.file_path]);
+    after();
+  });
+}
+
+// Coach dashboard: send a PDF, see what's been sent, manage player sign-in emails
+const thisMonday = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+function bcRoster() {
+  const last = S.meta.seasons[S.meta.seasons.length - 1].id, recent = p => p.hit.includes(last) || p.pit.includes(last);
+  return S.players.filter(p => p.bc && (p.hit.length || p.pit.length)).sort((a, b) => (recent(b) - recent(a)) || String(a.n).localeCompare(String(b.n)))
+    .map(p => ({ k: p.k, name: niceName(p.n), num: p.num, recent: recent(p) }));
+}
+async function plCoachBox() {
+  const box = $('#plans-coach'); if (!box) return;
+  const head = extra => `<div class="panel-h"><h2>Development plans &amp; feedback</h2>${extra || ''}</div>`;
+  if (!PL.session) { box.innerHTML = head() + plSignInHtml('Sign in with your email to send players their development plans and weekly feedback.'); plBindSignIn(box); return; }
+  if (PL.me?.role !== 'coach') { box.innerHTML = head(plWho()) + `<p style="margin:0"><b>${esc(PL.session.user.email)}</b> isn't set up as a coach. Coach emails are added in Supabase (see README).</p>`; plBindOut(box); return; }
+  const roster = bcRoster(), ui = S.ui.plans || (S.ui.plans = { kind: 'feedback', filter: '' });
+  const opt = (v, l, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(l)}</option>`;
+  box.innerHTML = head(plWho()) + `
+    <form class="pl-send" id="pl-send">
+      <label>Player<select name="player" required>${opt('', 'Choose a player…')}${roster.map(p => opt(p.k, `${p.num != null ? '#' + p.num + ' ' : ''}${p.name}${p.recent ? '' : ' (earlier)'}`, p.k === ui.player)).join('')}</select></label>
+      <label>Type<select name="kind">${Object.entries(PL_KIND).map(([k, l]) => opt(k, l, k === ui.kind)).join('')}</select></label>
+      <label>Week of<input type="date" name="week" value="${thisMonday()}"></label>
+      <label class="wide">Title<input type="text" name="title" maxlength="120" placeholder="Leave blank for “${PL_KIND[ui.kind]} · week of …”"></label>
+      <label class="wide">PDF<input type="file" name="file" accept="application/pdf,.pdf" required></label>
+      <div class="wide"><button class="btn vbtn-hi" type="submit">Send to player</button> <span class="pl-msg small"></span></div>
+    </form>
+    <div class="pl-sent"><div class="pl-sent-h"><h3>Sent</h3><select id="pl-filter" aria-label="Filter by player">${opt('', 'All players')}${roster.map(p => opt(p.k, p.name, p.k === ui.filter)).join('')}</select></div><div id="pl-sent-list"><p class="muted small">Loading…</p></div></div>
+    <details class="pl-access" id="pl-access"><summary>Player sign-in emails</summary><div id="pl-access-body"><p class="muted small">Loading…</p></div></details>`;
+  plBindOut(box);
+  const f = $('#pl-send'), msg = $('.pl-msg', f);
+  f.kind.onchange = () => { ui.kind = f.kind.value; f.title.placeholder = `Leave blank for “${PL_KIND[ui.kind]} · week of …”`; };
+  f.player.onchange = () => { ui.player = f.player.value; };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const file = f.file.files[0], key = f.player.value, kind = f.kind.value, week = f.week.value || null;
+    const say = (t, bad) => { msg.textContent = t; msg.classList.toggle('err-t', !!bad); };
+    if (!key) return say('Choose a player.', true);
+    if (!file) return say('Choose a PDF.', true);
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') return say('That file isn\'t a PDF.', true);
+    if (file.size > 20 * 1024 * 1024) return say('That PDF is over 20 MB. Export a smaller one.', true);
+    const title = f.title.value.trim() || `${PL_KIND[kind]}${week ? ' · week of ' + fmtDate(week) : ''}`;
+    const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    const path = `${key}/${id}.pdf`, btn = $('button[type=submit]', f);
+    btn.disabled = true; say('Uploading…');
+    const up = await PL.sb.storage.from('plans').upload(path, file, { contentType: 'application/pdf', upsert: false });
+    if (up.error) { btn.disabled = false; return say('Upload failed: ' + up.error.message, true); }
+    const ins = await PL.sb.from('plans').insert({ id, player_key: key, kind, title, week, file_path: path, coach_name: PL.me.name || null });
+    btn.disabled = false;
+    if (ins.error) { await PL.sb.storage.from('plans').remove([path]); return say('Couldn\'t save: ' + ins.error.message, true); }
+    const who = roster.find(p => p.k === key)?.name || key;
+    f.file.value = ''; f.title.value = ''; say(`Sent to ${who}.`);
+    if (!PL.members?.some(m => m.player_key === key)) say(`Sent to ${who}. He doesn't have a sign-in email yet. Add it under “Player sign-in emails” so he can open it.`);
+    plSentList();
+  };
+  $('#pl-filter').onchange = e => { ui.filter = e.target.value; plSentList(); };
+  $('#pl-access').addEventListener('toggle', e => { if (e.target.open) plAccess(); }, { once: true });
+  await plMembers();
+  plSentList();
+}
+async function plMembers() { const { data } = await PL.sb.from('members').select('*'); PL.members = data || []; return PL.members; }
+async function plSentList() {
+  const el = $('#pl-sent-list'); if (!el) return;
+  const filter = S.ui.plans?.filter || '';
+  let q = PL.sb.from('plans').select('*');
+  if (filter) q = q.eq('player_key', filter);
+  const { data, error } = await q.order('created_at', { ascending: false }).limit(filter ? 200 : 40);
+  if (error) { el.innerHTML = `<p class="err">${esc(error.message)}</p>`; return; }
+  const urls = await plSigned(data), pk = k => { const i = S.pidx.get(k); return esc(i != null ? niceName(S.players[i].n) : k); };   // plain text: the row is already a link
+  el.innerHTML = data.length ? `<ul class="pl-list">${data.map(r => plItem(r, urls[r.file_path], { coach: true, who: pk(r.player_key) })).join('')}</ul>` : '<p class="muted small" style="margin:0">Nothing sent yet.</p>';
+  plBindDelete(el, plSentList);
+}
+async function plAccess() {
+  const el = $('#pl-access-body'); if (!el) return;
+  const members = await plMembers(), roster = bcRoster();
+  const byKey = new Map(members.filter(m => m.role === 'player').map(m => [m.player_key, m]));
+  const coaches = members.filter(m => m.role === 'coach');
+  el.innerHTML = `<p class="muted small" style="margin:6px 0 10px">The email each player signs in with. He can only ever see plans sent to his own name. ${byKey.size} of ${roster.length} players set.</p>
+    <div class="pl-acc">${roster.map(p => { const m = byKey.get(p.k); return `<form class="pl-acc-row" data-k="${esc(p.k)}" data-name="${esc(p.name)}" data-old="${esc(m?.email || '')}">
+      <span class="nm">${p.num != null ? `<span class="muted">#${esc(p.num)}</span> ` : ''}${esc(p.name)}</span>
+      <input type="email" value="${esc(m?.email || '')}" placeholder="email@bc.edu" aria-label="Sign-in email for ${esc(p.name)}">
+      <button class="btn" type="submit">Save</button><span class="pl-msg small"></span></form>`; }).join('')}</div>
+    <p class="muted small" style="margin:10px 0 0">Coaches: ${coaches.map(c => esc(c.name || c.email)).join(', ') || 'none'} (added in Supabase).</p>`;
+  $$('.pl-acc-row', el).forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const email = $('input', f).value.trim().toLowerCase(), old = f.dataset.old, m = $('.pl-msg', f);
+    const say = (t, bad) => { m.textContent = t; m.classList.toggle('err-t', !!bad); };
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return say('Not an email', true);
+    if (email && PL.members.some(x => x.email === email && x.player_key !== f.dataset.k)) return say('Already used', true);
+    if (old && old !== email) { const { error } = await PL.sb.from('members').delete().eq('email', old); if (error) return say(error.message, true); }
+    if (email) { const { error } = await PL.sb.from('members').upsert({ email, role: 'player', player_key: f.dataset.k, name: f.dataset.name }); if (error) return say(error.message, true); }
+    f.dataset.old = email; say(email ? 'Saved' : 'Removed'); await plMembers();
+  });
 }
 
 async function pageHome() {
@@ -1789,6 +2010,7 @@ async function pagePlayer(key) {
   app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa)) + pvHtml;
   const sel = $('#pl-season'); if (sel) sel.value = ui.season;
   bindPlayer(i, p, role, ui);
+  if (PL.on && PL.me?.role === 'coach' && location.hash !== '#profile') plInsertBox(key);   // coaches see each player's plans
 }
 
 function poolSwitch(hasNcaa) {
@@ -2608,6 +2830,7 @@ window.addEventListener('hashchange', () => { const changedPage = location.hash 
   initTooltips();
   initTheme();
   initVideo();
+  plansInit().then(() => { if (PL.on && /^#(profile|player-)/.test(location.hash)) route(); });
   lastHash = location.hash;
   route();
 })();

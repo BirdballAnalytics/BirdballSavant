@@ -1,0 +1,5 @@
+{
+  "_note": "Development plans (Supabase). Paste your project's URL and anon/public key here (Supabase dashboard -> Project Settings -> API). The anon key is meant to be public; the database rules in scripts/plans-setup.sql decide who can see what. Leave both empty to turn the feature off.",
+  "supabaseUrl": "",
+  "supabaseAnonKey": ""
+}
