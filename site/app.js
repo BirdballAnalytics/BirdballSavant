@@ -1088,7 +1088,6 @@ async function pageProfile() {
     ${latest ? `<a class="btn" href="${esc(latest.href)}">Latest game: ${esc(latest.label)} ›</a>` : ''}
     <button type="button" class="btn" id="me-change">Change</button></div>`);
   $('#me-change').onclick = () => { S.ui.pickProfile = true; route(); };
-  plInsertBox(me);
 }
 function profilePicker(cur) {
   setNav('');
@@ -1105,10 +1104,6 @@ function profilePicker(cur) {
     <input type="search" class="me-q" id="me-q" placeholder="Search your name" autocomplete="off">
     <div class="me-list" id="me-list">${list.map(card).join('') || '<p class="empty">No BC players yet.</p>'}</div>
     ${cur ? `<div class="me-actions"><button type="button" class="btn" id="me-cancel">Keep current profile</button><button type="button" class="btn" id="me-clear">Remove my profile</button></div>` : ''}`;
-  if (PL.on && !PL.mine) {
-    $('.phead', app).insertAdjacentHTML('afterend', `<section class="panel pl-panel" id="pl-pick-code"><div class="panel-h"><h2>Have a plan code?</h2></div>${plCodeForm('Players: enter the plan code from the staff. It opens your profile and your development plans.')}</section>`);
-    plBindCode($('#pl-pick-code'));
-  }
   $('#me-q').oninput = e => { const q = e.target.value.trim().toLowerCase(); $$('#me-list .me-pick').forEach(b => b.hidden = q && !b.dataset.s.includes(q)); };
   $$('.me-pick').forEach(b => b.onclick = () => { ls.set('me', b.dataset.k); S.ui.pickProfile = false; route(); window.scrollTo(0, 0); });
   if (cur) {
@@ -1161,9 +1156,8 @@ async function pageCoach(kind, who) {
   const se = await loadSeason(S.season);
   const head = `<div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · ★ ${who ? esc(who) + ' · ' : ''}${COACH[kind]}</span><h1>${kind === 'hit' ? 'Hitting' : 'Pitching'} dashboard</h1></div>
     <div class="controls">${seasonSelect('co-season', v => { setSeason(v); route(); })}<button type="button" class="btn" id="me-change">Change</button></div></div>`;
-  app.innerHTML = head + (PL.on ? '<section class="panel pl-panel" id="plans-coach"><div class="panel-h"><h2>Development plans &amp; feedback</h2></div><p class="muted small">Loading…</p></section>' : '') + (kind === 'hit' ? coachHitting(se) : coachPitching(se));
+  app.innerHTML = head + (kind === 'hit' ? coachHitting(se) : coachPitching(se));
   $('#me-change').onclick = () => { S.ui.pickProfile = true; route(); };
-  if (PL.on) plCoachBox();
 }
 
 function coachHitting(se) {
@@ -1307,193 +1301,6 @@ function coachPitching(se) {
   ];
   const boards = `<section><div class="panel-h"><h2>Leaderboards</h2><span class="note">${esc(se.label)}</span></div><div class="lb-grid">${cards.join('')}</div></section>`;
   return glance + workload + boards;
-}
-
-/* ---------- Development plans & weekly feedback (PDFs from the staff, via GitHub) ----------
-   Coaches upload PDFs to GitHub named for the player; scripts/plans.py publishes them encrypted.
-   A player unlocks his own with his personal code (xxxx-xxxx); the staff unlock everything with
-   the staff password (the PLANS_SECRET repository secret). Without the right code the files are
-   unreadable, and the folder names don't say whose they are. Decryption happens on the phone. */
-const PL = { on: false, ready: null, report: null, staff: null, mine: null };
-const thisMonday = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const PL_ITER = 150000, PL_KIND = { plan: 'Development plan', feedback: 'Weekly feedback' };
-const te = new TextEncoder(), td = new TextDecoder();
-const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-const b64e = u => btoa(String.fromCharCode(...new Uint8Array(u)));
-const codeNorm = c => String(c || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-async function sha256hex(t) { const h = await crypto.subtle.digest('SHA-256', te.encode(t)); return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join(''); }
-async function pbkdf2Key(text, salt, extractable = false) {
-  const base = await crypto.subtle.importKey('raw', te.encode(text), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: te.encode(salt), iterations: PL_ITER }, base, { name: 'AES-GCM', length: 256 }, extractable, ['decrypt']);
-}
-const rawKey = b64 => crypto.subtle.importKey('raw', b64d(b64), 'AES-GCM', false, ['decrypt']);
-async function unseal(key, buf) { const u = new Uint8Array(buf); return crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12)); }
-async function fetchBin(url) { const r = await fetch(url, { cache: 'no-cache' }); if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { status: r.status }); return r.arrayBuffer(); }
-
-function plansInit() {
-  if (PL.ready) return PL.ready;
-  return (PL.ready = (async () => {
-    try { PL.report = await getJSON('data/plans-report.json'); } catch { return; }
-    PL.on = /^published/.test(PL.report?.status || '');
-    if (!PL.on || !window.crypto?.subtle) { PL.on = false; return; }
-    const sk = ls.get('plstaff', null);
-    if (sk) { try { await plStaffOpen(await rawKey(sk)); } catch { ls.set('plstaff', null); } }
-    const code = ls.get('plcode', null);
-    if (code) { try { await plUnlock(code); } catch (e) { if (e.status === 404 || e.name === 'OperationError') ls.set('plcode', null); } }
-  })().catch(err => { console.warn('Development plans unavailable', err); }));
-}
-async function plUnlock(code) {   // a player's own plans
-  const c = codeNorm(code); if (c.length < 2) throw Object.assign(new Error('bad code'), { name: 'OperationError' });
-  const folder = (await sha256hex('bbs-plans-path:' + c)).slice(0, 24);
-  const key = await pbkdf2Key(c, 'bbs-plans:' + folder);
-  const idx = JSON.parse(td.decode(await unseal(key, await fetchBin(`data/plans/${folder}/index.bin`))));
-  PL.mine = { folder, key, idx, code };
-  return PL.mine;
-}
-async function plStaffOpen(key) { PL.staff = JSON.parse(td.decode(await unseal(key, await fetchBin('data/plans/staff.bin')))); return PL.staff; }
-const plSeen = () => new Set(ls.get('plseen', []));
-function plMarkSeen(id) { const s = plSeen(); s.add(id); ls.set('plseen', [...s].slice(-500)); }
-
-// --- PDF viewer (pdf.js, bundled; works inside the home-screen app)
-let pdfLib = null;
-async function loadPdfJs() {
-  if (!pdfLib) pdfLib = import('./vendor/pdfjs/pdf.min.js').then(m => { m.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.js', location.href).href; return m; });
-  return pdfLib;
-}
-async function plView(folder, key, item) {
-  let dlg = $('#pdfmodal');
-  if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'pdfmodal'; dlg.className = 'vmodal pdfmodal'; document.body.appendChild(dlg); dlg.addEventListener('close', () => { if (dlg.dataset.url) URL.revokeObjectURL(dlg.dataset.url); dlg.innerHTML = ''; }); dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); }); }
-  dlg.innerHTML = `<div class="vm-in"><div class="vm-top"><div class="vm-title">${esc(item.title)}</div><span class="pdf-dl"></span><button type="button" class="vm-x" aria-label="Close">✕</button></div>
-    <div class="pdf-pages"><p class="muted" style="padding:20px">Opening…</p></div></div>`;
-  $('.vm-x', dlg).onclick = () => dlg.close();
-  if (!dlg.open) dlg.showModal();
-  const pages = $('.pdf-pages', dlg);
-  try {
-    const bytes = new Uint8Array(await unseal(key, await fetchBin(`data/plans/${folder}/${item.id}.bin`)));
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })); dlg.dataset.url = url;
-    $('.pdf-dl', dlg).innerHTML = `<a class="btn" href="${url}" download="${esc(item.title.replace(/[\\/:*?"<>|]+/g, ' '))}.pdf">Save</a>`;
-    plMarkSeen(item.id);
-    const lib = await loadPdfJs();
-    const doc = await lib.getDocument({ data: bytes.slice() }).promise;
-    pages.innerHTML = '';
-    const W = Math.min(pages.clientWidth || 800, 1000), dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-    for (let n = 1; n <= doc.numPages; n++) {
-      if (!dlg.open) return;
-      const page = await doc.getPage(n), vp1 = page.getViewport({ scale: 1 }), vp = page.getViewport({ scale: (W - 16) / vp1.width * dpr });
-      const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height; cv.className = 'pdf-page';
-      pages.appendChild(cv);
-      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-    }
-  } catch (err) {
-    console.warn(err);
-    pages.innerHTML = `<p class="err" style="margin:16px">This PDF couldn't be shown here.${dlg.dataset.url ? ' Use <b>Save</b> to open it.' : ''}</p>`;
-  }
-}
-function plList(folder, key, plans, { seen, staff } = {}) {
-  if (!plans.length) return `<p class="muted" style="margin:0">${staff ? 'Nothing sent to this player yet.' : 'Nothing from the staff yet. Development plans and weekly feedback show up here.'}</p>`;
-  const S2 = seen || new Set();
-  return `<ul class="pl-list">${plans.map(r => `<li class="pl-item${!staff && !S2.has(r.id) ? ' unread' : ''}"><a class="pl-open" href="#" data-id="${esc(r.id)}" data-folder="${esc(folder)}">
-      <span class="pl-ico" aria-hidden="true">PDF</span><span class="pl-txt"><b>${esc(r.title)}</b><span class="pl-kind k-${esc(r.kind)}">${PL_KIND[r.kind] || esc(r.kind)}</span><span class="muted small">${esc(fmtDate(r.date, true))}</span></span>
-      ${!staff && !S2.has(r.id) ? '<span class="pl-new">New</span>' : ''}</a></li>`).join('')}</ul>`;
-}
-function plBindList(root, key, plans) {
-  $$('.pl-open', root).forEach(a => a.onclick = e => {
-    e.preventDefault(); const item = plans.find(x => x.id === a.dataset.id); if (!item) return;
-    const li = a.closest('.pl-item'); li.classList.remove('unread'); $('.pl-new', li)?.remove();
-    plView(a.dataset.folder, key, item);
-  });
-}
-
-// --- Player: his own plans (Profile). Coaches with the staff view also see them on player pages.
-function plInsertBox(key) {
-  if (!PL.on) return;
-  const after = $('.me-bar', app) || $('.phead', app) || app.firstElementChild;
-  if (!after || $('#plans-box', app)) return;
-  after.insertAdjacentHTML('afterend', '<section class="panel pl-panel" id="plans-box"></section>');
-  plPlayerBox(key);
-}
-async function plPlayerBox(key) {
-  const box = $('#plans-box'); if (!box) return;
-  const head = extra => `<div class="panel-h"><h2>Development plans</h2>${extra || ''}</div>`;
-  if (PL.staff) {   // staff view of any player
-    const p = PL.staff.players.find(x => x.k === key); if (!p) { box.remove(); return; }
-    box.innerHTML = head(`<span class="muted small">Staff view · code <b>${esc(p.code)}</b></span>`) + plList(p.folder, null, p.plans, { staff: true });
-    const k = await rawKey(p.key); plBindList(box, k, p.plans); return;
-  }
-  if (PL.mine && PL.mine.idx.player === key) {
-    const m = PL.mine;
-    box.innerHTML = head(`<span class="muted small"><button type="button" class="linkbtn pl-forget">Remove code from this phone</button></span>`) + plList(m.folder, m.key, m.idx.plans, { seen: plSeen() });
-    plBindList(box, m.key, m.idx.plans);
-    $('.pl-forget', box).onclick = () => { ls.set('plcode', null); PL.mine = null; route(); };
-    return;
-  }
-  if (location.hash !== '#profile') { box.remove(); return; }
-  box.innerHTML = head() + plCodeForm('Enter the plan code the staff gave you to see your development plans and weekly feedback. You only need to do this once on this phone.');
-  plBindCode(box);
-}
-function plCodeForm(why) {
-  return `<div class="pl-signin"><p class="muted" style="margin:0 0 8px">${why}</p>
-    <form class="pl-form-code"><input type="text" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. 16-JS" maxlength="12" aria-label="Plan code">
-      <button class="btn" type="submit">Unlock</button></form><p class="pl-msg small"></p></div>`;
-}
-function plBindCode(root) {
-  const f = $('.pl-form-code', root), msg = $('.pl-msg', root); if (!f) return;
-  f.onsubmit = async e => {
-    e.preventDefault(); const code = $('input', f).value; const b = $('button', f); b.disabled = true; msg.textContent = 'Checking…'; msg.classList.remove('err-t');
-    try {
-      const m = await plUnlock(code);
-      ls.set('plcode', m.code); ls.set('me', m.idx.player); S.ui.pickProfile = false;
-      if (location.hash === '#profile') route(); else location.hash = 'profile';
-    } catch (err) {
-      b.disabled = false; msg.classList.add('err-t');
-      msg.textContent = err.status === 404 || err.name === 'OperationError' ? 'That code isn\'t right. Check it with your coach.' : 'Couldn\'t check the code. Are you online?';
-    }
-  };
-}
-
-// --- Coach dashboard: staff password, every player's code, and what's been sent
-async function plCoachBox() {
-  const box = $('#plans-coach'); if (!box) return;
-  const head = extra => `<div class="panel-h"><h2>Development plans &amp; feedback</h2>${extra || ''}</div>`;
-  if (!PL.staff) {
-    box.innerHTML = head() + `<div class="pl-signin"><p class="muted" style="margin:0 0 8px">Enter the staff password to see every player's plans and their plan codes. You only need to do this once on this phone.</p>
-      <form class="pl-form-staff"><input type="password" required autocomplete="current-password" placeholder="Staff password" aria-label="Staff password"><button class="btn" type="submit">Unlock</button></form><p class="pl-msg small"></p></div>`;
-    const f = $('.pl-form-staff', box), msg = $('.pl-msg', box);
-    f.onsubmit = async e => {
-      e.preventDefault(); const b = $('button', f); b.disabled = true; msg.textContent = 'Checking…'; msg.classList.remove('err-t');
-      try {
-        const key = await pbkdf2Key($('input', f).value.trim(), 'bbs-plans-staff', true);
-        await plStaffOpen(key);
-        ls.set('plstaff', b64e(await crypto.subtle.exportKey('raw', key)));
-        plCoachBox();
-      } catch (err) { b.disabled = false; msg.classList.add('err-t'); msg.textContent = err.name === 'OperationError' ? 'That password isn\'t right.' : 'Couldn\'t check it. Are you online?'; }
-    };
-    return;
-  }
-  const st = PL.staff, ui = S.ui.plans || (S.ui.plans = { open: null });
-  const total = sum(st.players.map(p => p.plans.length)), skipped = PL.report?.skipped || [];
-  const latest = p => p.plans[0]?.date || '';
-  const rows = [...st.players].sort((a, b) => latest(b).localeCompare(latest(a)) || a.name.localeCompare(b.name));
-  const msgFor = p => `${p.name.split(' ')[0]}, your BirdballSavant plan code is ${p.code}. Open BirdballSavant → Profile → Development plans and enter it once.`;
-  box.innerHTML = head(`<span class="muted small">${F.int(total)} PDF${total === 1 ? '' : 's'} · updated ${esc(fmtDate(st.built.slice(0, 10)))} · <button type="button" class="linkbtn pl-lock">Lock on this phone</button></span>`) + `
-    <div class="pl-how"><b>To send one:</b> upload the PDF to GitHub with the player's name first, like <code>Toomey - Weekly feedback ${esc(thisMonday())}.pdf</code>
-      (a date in the name sets the week; "feedback" or "weekly" in the name marks it as weekly feedback). It appears here and on his phone a few minutes later.
-      <span class="pl-btns">${st.upload ? `<a class="btn" href="${esc(st.upload)}" target="_blank" rel="noopener">Upload a PDF on GitHub ↗</a>` : ''}${st.publish ? `<a class="btn" href="${esc(st.publish)}" target="_blank" rel="noopener" title="Run workflow there to publish right away">Publish now ↗</a>` : ''}</span></div>
-    ${skipped.length ? `<p class="err-t small" style="margin:8px 0">Not matched to a player (rename and re-upload): ${skipped.map(x => `<b>${esc(x.file)}</b> (${esc(x.why)})`).join(', ')}</p>` : ''}
-    <div class="pl-codes">${rows.map(p => `<div class="pl-row" data-k="${esc(p.k)}">
-      <span class="nm">${p.num != null ? `<span class="muted">#${esc(p.num)}</span> ` : ''}<b>${esc(p.name)}</b></span>
-      <span class="ct small muted">${p.plans.length ? `${p.plans.length} PDF${p.plans.length === 1 ? '' : 's'} · latest ${esc(fmtDate(latest(p)))}` : 'No PDFs yet'}</span>
-      <span class="cd"><code>${esc(p.code)}</code> <button type="button" class="linkbtn pl-copy" data-msg="${esc(msgFor(p))}">Copy message</button></span>
-      <span class="vw">${p.plans.length ? `<button type="button" class="linkbtn pl-show">${ui.open === p.k ? 'Hide' : 'View'}</button>` : ''}</span>
-      ${ui.open === p.k ? `<div class="pl-sub-in" data-k="${esc(p.k)}">${plList(p.folder, null, p.plans, { staff: true })}</div>` : ''}</div>`).join('')}</div>`;
-  $('.pl-lock', box).onclick = () => { ls.set('plstaff', null); PL.staff = null; route(); };
-  $$('.pl-copy', box).forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.msg); b.textContent = 'Copied ✓'; } catch { b.textContent = 'Copy failed: select the code'; }
-    setTimeout(() => { if (b.isConnected) b.textContent = 'Copy message'; }, 2500);
-  });
-  $$('.pl-show', box).forEach(b => b.onclick = () => { const k = b.closest('.pl-row').dataset.k; ui.open = ui.open === k ? null : k; plCoachBox(); });
-  const sub = $('.pl-sub-in', box);
-  if (sub) { const p = st.players.find(x => x.k === sub.dataset.k); plBindList(sub, await rawKey(p.key), p.plans); }
 }
 
 async function pageHome() {
@@ -1982,7 +1789,6 @@ async function pagePlayer(key) {
   app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa)) + pvHtml;
   const sel = $('#pl-season'); if (sel) sel.value = ui.season;
   bindPlayer(i, p, role, ui);
-  if (PL.on && PL.staff && location.hash !== '#profile') plInsertBox(key);   // coaches see each player's plans
 }
 
 function poolSwitch(hasNcaa) {
@@ -2802,7 +2608,6 @@ window.addEventListener('hashchange', () => { const changedPage = location.hash 
   initTooltips();
   initTheme();
   initVideo();
-  plansInit().then(() => { if (PL.on && /^#(profile|player-)/.test(location.hash)) route(); });
   lastHash = location.hash;
   route();
 })();
