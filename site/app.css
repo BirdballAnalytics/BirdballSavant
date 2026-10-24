@@ -440,3 +440,6 @@ html.standalone .nav a:not([data-nav="glossary"]) { display: none; }
   font-weight: 600; font-size: .85rem; text-decoration: none; white-space: nowrap; }
 .subnav a.on { background: var(--maroon); border-color: var(--maroon); color: #fff; }
 
+
+.h1-sub { font-size: .55em; color: var(--gold); letter-spacing: .04em; vertical-align: middle; }
+html[data-theme="light"] .h1-sub { color: var(--maroon); }

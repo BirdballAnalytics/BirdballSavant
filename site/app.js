@@ -460,17 +460,20 @@ function seasonHitters(se) {
   out.forEach(o => { o.rvGrade = rvGrade(se, se.byH.get(o.i) || [], false); });
   return (se.cache.hit = { rows: out, q });
 }
-function seasonPitchers(se) {
-  if (se.cache.pit) return se.cache.pit;
+function seasonPitchers(se, side = 'all') {   // side: 'all', 'L' (vs LHH) or 'R' (vs RHH)
+  const ck = side === 'all' ? 'pit' : 'pit' + side;
+  if (se.cache[ck]) return se.cache[ck];
   const out = [];
-  for (const [i, rows] of se.byP) {
+  for (const [i, all] of se.byP) {
     const p = S.players[i]; if (!p.bc) continue;
+    const rows = side === 'all' ? all : all.filter(r => r.bs === side);
+    if (!rows.length) continue;
     const st = stats(rows);
     out.push({ i, name: p.n, ...st, ...pitchShape(rows), throws: p.th });
   }
   const q = MIN_PA;   // qualifying minimum for rate stats, leaderboards and percentiles
   out.forEach(o => o.q = o.PA >= q);
-  return (se.cache.pit = { rows: out, q });
+  return (se.cache[ck] = { rows: out, q });
 }
 function percentile(v, pool, dir) {
   const vals = pool.filter(x => x != null && isFinite(x));
@@ -742,7 +745,7 @@ function locationChart(rows, active, catcher = false) {
   return svg(W, H, g, catcher ? 'Pitch locations, catcher\'s view' : 'Pitch locations, pitcher\'s view');
 }
 
-function movementChart(rows, active) {
+function movementChart(rows, active, opts = {}) {   // opts.season: season pitches -> show season averages instead of expected
   const W = 360, H = 360, m = 30, R = 28;
   const X = v => m + (v + R) / (2 * R) * (W - 2 * m), Y = v => H - m - (v + R) / (2 * R) * (H - 2 * m);
   let g = '';
@@ -756,14 +759,21 @@ function movementChart(rows, active) {
   const by = {}; pts.forEach(r => (by[r.pt] = by[r.pt] || []).push(r));
   const clampR = v => Math.max(-R, Math.min(R, v));
   for (const k in by) {
-    const a = by[k], hx = mean(a.map(r => r.hb)), vy = mean(a.map(r => r.ivb)), xm = xMove(a);
+    const a = by[k], hx = mean(a.map(r => r.hb)), vy = mean(a.map(r => r.ivb)), xm = opts.season ? {} : xMove(a);
+    const sa = opts.season ? opts.season.filter(r => r.pt === k && r.hb != null && r.ivb != null) : null;
+    if (sa && sa.length >= 3) {   // season average: hollow ring, joined to tonight's average
+      const sx = mean(sa.map(r => r.hb)), sy = mean(sa.map(r => r.ivb)), ex = X(clampR(sx)), ey = Y(clampR(sy));
+      g += `<line x1="${ex.toFixed(1)}" y1="${ey.toFixed(1)}" x2="${X(hx).toFixed(1)}" y2="${Y(vy).toFixed(1)}" stroke="${PT[k].c}" stroke-width="1.6" stroke-opacity=".7"/>`;
+      g += `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7.5" fill="var(--surface)" fill-opacity=".6" stroke="${PT[k].c}" stroke-width="2.4" data-tip="${esc(`<b>${esc(PT[k].n)}: season average</b><br>IVB ${F.f1(sy)} · HB ${F.f1(sx)}<br><span class='muted'>${sa.length} pitches</span>`)}"/>`;
+      a._season = { ivb: sy, hb: sx };
+    }
     if (xm.xivb != null) {
       const ex = X(clampR(xm.xhb)), ey = Y(clampR(xm.xivb));
       g += `<line x1="${ex.toFixed(1)}" y1="${ey.toFixed(1)}" x2="${X(hx).toFixed(1)}" y2="${Y(vy).toFixed(1)}" stroke="var(--surface)" stroke-width="4"/><line x1="${ex.toFixed(1)}" y1="${ey.toFixed(1)}" x2="${X(hx).toFixed(1)}" y2="${Y(vy).toFixed(1)}" stroke="${PT[k].c}" stroke-width="1.8" stroke-dasharray="3 3"/>`;
       g += `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7" fill="var(--surface)" fill-opacity=".55" stroke="var(--surface)" stroke-width="5"/>`;
       g += `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7" fill="none" stroke="${PT[k].c}" stroke-width="2.2" stroke-dasharray="3 2" data-tip="${esc(`<b>${esc(PT[k].n)}: expected</b><br>IVB ${F.f1(xm.xivb)} · HB ${F.f1(xm.xhb)}<br><span class='muted'>for this arm slot and velo</span>`)}"/>`;
     }
-    g += `<circle cx="${X(hx)}" cy="${Y(vy)}" r="8" fill="${PT[k].c}" stroke="var(--surface)" stroke-width="2.5" data-tip="${esc(`<b>${esc(PT[k].n)} average</b><br>IVB ${F.f1(vy)} · HB ${F.f1(hx)}${xm.divb != null ? `<br>vs expected: IVB ${fmtD(xm.divb)} · HB ${fmtD(xm.dhb)} (arm side +)` : ''}`)}"/>`;
+    g += `<circle cx="${X(hx)}" cy="${Y(vy)}" r="8" fill="${PT[k].c}" stroke="var(--surface)" stroke-width="2.5" data-tip="${esc(`<b>${esc(PT[k].n)} ${opts.season ? 'this game' : 'average'}</b><br>IVB ${F.f1(vy)} · HB ${F.f1(hx)}${xm.divb != null ? `<br>vs expected: IVB ${fmtD(xm.divb)} · HB ${fmtD(xm.dhb)} (arm side +)` : ''}${a._season ? `<br>vs season: IVB ${fmtD(vy - a._season.ivb)} · HB ${fmtD(hx - a._season.hb)}` : ''}`)}"/>`;
   }
   return svg(W, H, g, 'Pitch movement chart');
 }
@@ -1429,9 +1439,11 @@ async function pageLeaders(kind) {
   setNav(kind);
   const se = await loadSeason(S.season);
   const isHit = kind === 'hitting';
-  const T = isHit ? seasonHitters(se) : seasonPitchers(se);
   const views = isHit ? HIT_VIEWS : PIT_VIEWS;
   const ui = S.ui[kind] || (S.ui[kind] = { view: 'standard', min: null });
+  const side = !isHit && (ui.side === 'L' || ui.side === 'R') ? ui.side : 'all';
+  const T = isHit ? seasonHitters(se) : seasonPitchers(se, side);
+  const sideOk = r => side === 'all' || r.bs === side;
   const min = ui.min ?? T.q;
   const data = T.rows.filter(o => o.PA >= min && (ui.view !== 'bat' || o.swingsTracked > 0));
   const viewOpts = Object.entries(views).map(([k, v]) => [k, v[0]]);
@@ -1449,18 +1461,20 @@ async function pageLeaders(kind) {
   const defSort = isHit ? (ui.view === 'bat' ? 'batSpd' : ui.view === 'discipline' ? 'PA' : ui.view === 'statcast' ? 'xwoba' : 'ops') : (ui.view === 'standard' ? 'outs' : ui.view === 'statcast' ? 'PA' : 'pitches');
   const tid = `t-${kind}-${ui.view}`;
   if (!S.sort[tid]) S.sort[tid] = { k: defSort, asc: false };
-  const total = stats(se.rows.filter(r => isBC(S.players[isHit ? r.h : r.p]?.t)));
-  if (!isHit) Object.assign(total, pitchShape(se.rows.filter(r => isBC(S.players[r.p]?.t))));
-  total._label = 'BC total';
+  const total = stats(se.rows.filter(r => isBC(S.players[isHit ? r.h : r.p]?.t) && (isHit || sideOk(r))));
+  if (!isHit) Object.assign(total, pitchShape(se.rows.filter(r => isBC(S.players[r.p]?.t) && sideOk(r))));
+  total._label = side !== 'all' ? `BC total vs ${side}HH` : 'BC total';
   app.innerHTML = `
-  <div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · Boston College</span><h1>${isHit ? 'Hitting' : 'Pitching'} Leaderboard</h1></div>
+  <div class="phead"><div><span class="eyebrow">${esc(seasonLabel(S.season))} · Boston College</span><h1>${isHit ? 'Hitting' : 'Pitching'} Leaderboard${side !== 'all' ? ` <span class="h1-sub">vs ${side}HH</span>` : ''}</h1></div>
     <div class="controls">${seasonSelect('lb-season', v => { setSeason(v); route(); })}
       <label for="lb-min">Min ${isHit ? 'PA' : 'BF'}</label><input id="lb-min" type="number" min="0" value="${min}">
     </div></div>
   <div class="controls">${segmented('lb-view', viewOpts, ui.view, v => { ui.view = v; route(); })}
+    ${!isHit ? segmented('lb-side', [['all', 'All batters'], ['L', 'vs LHH'], ['R', 'vs RHH']], side, v => { ui.side = v; route(); }) : ''}
     ${ui.view === 'bat' ? `<span class="muted small">Bat tracking was on in ${new Set(se.rows.filter(r => r.bat != null).map(r => r.g)).size} of ${se.games.length} games this season</span>` : ''}
     <span class="muted small">${data.length} of ${T.rows.length} players · qualified = ${T.q}+ ${isHit ? 'PA' : 'batters faced'} · click a column to sort${isHit && se.games.some(g => g.nt) ? ` · includes ${se.games.filter(g => g.nt).length} results-only game(s) in counting stats` : ''}</span></div>
   ${isHit && ui.view === 'bat' ? batCharts(se, data) : ''}
+  ${!isHit && side !== 'all' ? `<p class="muted small" style="margin:0 0 6px">Only pitches to ${side === 'L' ? 'left' : 'right'}-handed batters (switch hitters count by the side they batted from). Min BF and the qualifying line use batters faced on this side.</p>` : ''}
   ${table(tid, [nameCol, ...(isHit ? [{ k: 'bats', label: 'B', fmt: F.str }] : [{ k: 'throws', label: 'T', fmt: F.str }]), ...vcols], data, { total })}`;
   const mi = $('#lb-min'); mi.onchange = () => { ui.min = Math.max(0, +mi.value || 0); route(); };
 }
@@ -2260,6 +2274,31 @@ function paCard(se, pa, role, n) {
     </div>
   </article>`;
 }
+// Postgame: this game's movement on top of the pitcher's season averages
+function pgMovement(rows, seasonRows, seasonName) {
+  const tracked = rows.filter(r => r.hb != null && r.ivb != null);
+  if (tracked.length < 3) return '';
+  const types = PT_ORDER.filter(k => tracked.some(r => r.pt === k));
+  const cmp = types.map(k => {
+    const g = rows.filter(r => r.pt === k), s = seasonRows.filter(r => r.pt === k);
+    const m = (a, f) => { const v = a.map(f).filter(x => x != null && isFinite(x)); return v.length ? mean(v) : null; };
+    const d = (a, b) => (a != null && b != null ? a - b : null);
+    const o = { pt: k, n: g.length, sn: s.length, v: m(g, r => r.v), ivb: m(g, r => r.ivb), hb: m(g, r => r.hb), spin: m(g, r => r.spin) };
+    if (s.length >= 3) Object.assign(o, { dv: d(o.v, m(s, r => r.v)), divb: d(o.ivb, m(s, r => r.ivb)), dhb: d(o.hb, m(s, r => r.hb)), dspin: d(o.spin, m(s, r => r.spin)) });
+    return o;
+  });
+  const dcell = (v, unit, nd = 1) => (v == null ? '<span class="muted">—</span>' : `<span class="dlt">${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(nd)}</span>`);
+  return `<section class="grid2">
+    <div class="panel"><div class="panel-h"><h2>Pitch movement</h2><span class="note">This game vs his season · pitcher's view</span></div>
+      <div class="chart-box" style="max-width:380px">${movementChart(rows, new Set(types), { season: seasonRows })}</div>
+      <div class="legend">${types.map(k => `<span><i style="background:${PT[k].c}"></i>${PT[k].n}</span>`).join('')}<span><b>●</b> this game · <b>○</b> season average</span></div></div>
+    <div class="panel"><div class="panel-h"><h2>Compared with his season</h2><span class="note">${esc(seasonName)} averages</span></div>
+      ${table('t-pg-mv', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true }, { k: 'n', label: '#', fmt: F.int },
+        { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'dv', label: 'Δ', html: r => dcell(r.dv) }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'divb', label: 'Δ', html: r => dcell(r.divb) },
+        { k: 'hb', label: 'HB', fmt: F.f1 }, { k: 'dhb', label: 'Δ', html: r => dcell(r.dhb) }, { k: 'spin', label: 'Spin', fmt: F.int }, { k: 'dspin', label: 'Δ', html: r => dcell(r.dspin, 'rpm', 0) }], cmp, { nosort: true })}
+      <p class="muted small" style="margin:6px 0 0">Δ = this game minus his season average for that pitch (season includes this game). HB is from the pitcher's view, as on the chart.</p></div>
+  </section>`;
+}
 function veloByPitch(rows) {
   const pts = rows.map((r, n) => ({ n: n + 1, r })).filter(o => o.r.v != null);
   if (pts.length < 2) return '';
@@ -2321,6 +2360,7 @@ async function pagePlayerGame(sid, gi, role, key) {
       { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int },
       { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, ...XMOV_COLS, { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'whiff', label: 'Whiff%', fmt: F.pct },
       { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'avgEV', label: 'EV', fmt: F.f1 }], ars, { sort: 'n' })}</section>
+      ${pgMovement(rows, (se.byP.get(i) || []).filter(r => !r.nt), se.label)}
       <section class="grid2">
         <div class="panel"><div class="panel-h"><h2>Pitch locations</h2><span class="note">Pitcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
           <div class="legend">${ars.map(a => `<span><i style="background:${PT[a.pt].c}"></i>${PT[a.pt].n}</span>`).join('')}</div></div>
