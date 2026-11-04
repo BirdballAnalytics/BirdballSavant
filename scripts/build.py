@@ -24,6 +24,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import video  # noqa: E402  (AWRE / TruMedia clip matching)
+import pitchgrades  # noqa: E402  (Stuff+ / Location+ / Pitching+)
 import runvalue  # noqa: E402  (pitch run values + swing-decision model)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -879,6 +880,9 @@ def build():
         return players[key]
 
     df["season"], df["slabel"] = zip(*[season_of(d) for d in df["gdate"]])
+    grades_report = {}
+    if "rv" in df.columns and df["rv"].notna().any():
+        df, grades_report = pitchgrades.add_pitch_grades(df, log)
 
     for (k, n, t, th, s), _ in df.groupby(["pkey", "Pitcher", "PitcherTeam", "PitcherThrows", "season"], dropna=False):
         p = add_player(k, n, t)
@@ -1015,6 +1019,8 @@ def build():
             "xw": [r(x, 3) for x in sdf["xwv"]],
             "nt": [int(x) for x in sdf["nt"].fillna(0)],
             "k2": [r(x, 0) for x in sdf["k2"]],
+            # Stuff / Location / Pitching: expected runs saved per pitch x 10,000 (see pitchgrades.py)
+            **({k: [None if pd.isna(x) else int(round(x * pitchgrades.MULT[k])) for x in sdf[k]] for k in ("sp", "lp", "pp")} if "sp" in sdf.columns else {}),
         }
         # video: index into this season's clip list (None = no video for that pitch)
         clip_list, clip_ix = [], {}
@@ -1049,6 +1055,7 @@ def build():
         "bc": BC_CANON, "players": players_out, "execution": execution, "corrections": corr_report, "bats": bats_report,
         "ncaa": ncaa_index(),
         "runvalue": rv_report,
+        "grades": grades_report,
         "video": {"report": vreport, "players": vextra["players"], "other": vextra["other"]},
         "weights": W,
     }
