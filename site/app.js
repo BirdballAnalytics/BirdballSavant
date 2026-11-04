@@ -122,7 +122,7 @@ function quantile(arr, q) { if (!arr.length) return null; const a = [...arr].sor
 function stats(rows) {
   const t = { pitches: 0, PA: 0, AB: 0, H: 0, '1B': 0, '2B': 0, '3B': 0, HR: 0, BB: 0, HBP: 0, K: 0, SF: 0, SH: 0, ROE: 0, TB: 0,
     wsum: 0, xwsum: 0, xbasum: 0, xslgsum: 0, bbe: 0, evs: [], las: [], hh: 0, brl: 0, ss: 0, gb: 0, ld: 0, fb: 0, pu: 0, htN: 0,
-    pull: 0, cent: 0, oppo: 0, dirN: 0, sw: 0, wh: 0, zn: 0, zsw: 0, zcon: 0, ozn: 0, osw: 0, ocon: 0, locN: 0, fpN: 0, fps: 0, fpk: 0, csw: 0,
+    pull: 0, cent: 0, oppo: 0, dirN: 0, pullAir: 0, pullFB: 0, sw: 0, wh: 0, zn: 0, zsw: 0, zcon: 0, ozn: 0, osw: 0, ocon: 0, locN: 0, fpN: 0, fps: 0, fpk: 0, csw: 0,
     bats: [], runs: 0, outs: 0, games: new Set(), dists: [], ntPA: 0, tAB: 0, tden: 0,
     fast: 0, vats: [], ideal: 0, hats: [], sqN: 0, sq: 0, blast: 0, k2PA: 0, k2W: 0,
     rvN: 0, rv: 0, rvSw: 0, rvTk: 0 };
@@ -159,7 +159,7 @@ function stats(rows) {
       if (r.dir != null && r.bs) {
         t.dirN++;
         const pull = r.bs === 'R' ? r.dir < -15 : r.dir > 15, oppo = r.bs === 'R' ? r.dir > 15 : r.dir < -15;
-        if (pull) t.pull++; else if (oppo) t.oppo++; else t.cent++;
+        if (pull) { t.pull++; if (r.la != null && r.la >= 10) t.pullAir++; if (r.la != null && r.la >= 25 && r.la <= 50) t.pullFB++; } else if (oppo) t.oppo++; else t.cent++;
       }
       if (r.dist != null && r.la != null && r.la > 10) t.dists.push(r.dist);
     }
@@ -191,7 +191,7 @@ function stats(rows) {
     bbe: t.bbe, avgEV: mean(t.evs), maxEV: t.evs.length ? Math.max(...t.evs) : null, ev90: quantile(t.evs, 0.9), avgLA: mean(t.las),
     hhPct: d(t.hh, t.bbe), brlPct: d(t.brl, t.bbe), brl: t.brl, ssPct: d(t.ss, t.las.length),
     gbPct: d(t.gb, t.htN), ldPct: d(t.ld, t.htN), fbPct: d(t.fb, t.htN), puPct: d(t.pu, t.htN),
-    pullPct: d(t.pull, t.dirN), centPct: d(t.cent, t.dirN), oppoPct: d(t.oppo, t.dirN),
+    pullPct: d(t.pull, t.dirN), centPct: d(t.cent, t.dirN), oppoPct: d(t.oppo, t.dirN), pullAir: d(t.pullAir, t.dirN), pullFB: d(t.pullFB, t.dirN),
     swing: d(t.sw, t.pitches), whiff: d(t.wh, t.sw), zone: d(t.zn, t.locN), zswing: d(t.zsw, t.zn), chase: d(t.osw, t.ozn),
     zcontact: d(t.zcon, t.zsw), contact: d(t.sw - t.wh, t.sw), fpSwing: d(t.fps, t.fpN), fpStrike: d(t.fpk, t.fpN), csw: d(t.csw, t.pitches),
     batSpd: t.bats.length ? mean(t.bats) : null, maxBat: t.bats.length ? Math.max(...t.bats) : null, swingsTracked: t.bats.length,
@@ -257,6 +257,7 @@ function arsenal(rows) {
       whiff: st.whiff, csw: st.csw, chase: st.chase, zone: st.zone, avgEV: st.avgEV, hhPct: st.hhPct,
       xwoba: st.xwoba, woba: st.woba, xba: st.xba, ba: st.avg, PA: st.PA, K: st.K,
       putaway: two.length ? two.filter(r => r.r === 'K').length / two.length : null,
+      ...gradesOf(a), ...pitcherRV(a),
     };
   });
 }
@@ -469,7 +470,7 @@ function seasonPitchers(se, side = 'all') {   // side: 'all', 'L' (vs LHH) or 'R
     const rows = side === 'all' ? all : all.filter(r => r.bs === side);
     if (!rows.length) continue;
     const st = stats(rows);
-    out.push({ i, name: p.n, ...st, ...pitchShape(rows), throws: p.th });
+    out.push({ i, name: p.n, ...st, ...pitchShape(rows), ...gradesOf(rows), vaax: vaaX(se, rows), throws: p.th });
   }
   const q = MIN_PA;   // qualifying minimum for rate stats, leaderboards and percentiles
   out.forEach(o => o.q = o.PA >= q);
@@ -572,6 +573,12 @@ const C = {
   brlPct: { k: 'brlPct', label: 'Barrel%', fmt: F.pct }, brl: { k: 'brl', label: 'Barrels', fmt: F.int }, hhPct: { k: 'hhPct', label: 'Hard Hit%', fmt: F.pct, tip: 'Exit velocity 95+ mph' },
   gbPct: { k: 'gbPct', label: 'GB%', fmt: F.pct }, ldPct: { k: 'ldPct', label: 'LD%', fmt: F.pct }, fbPct: { k: 'fbPct', label: 'FB%', fmt: F.pct }, puPct: { k: 'puPct', label: 'PU%', fmt: F.pct },
   pullPct: { k: 'pullPct', label: 'Pull%', fmt: F.pct }, centPct: { k: 'centPct', label: 'Straight%', fmt: F.pct }, oppoPct: { k: 'oppoPct', label: 'Oppo%', fmt: F.pct },
+  pullAir: { k: 'pullAir', label: 'Pulled Air%', fmt: F.pct, tip: 'Share of batted balls pulled in the air (launch angle 10°+): the best batted-ball predictor of power' },
+  pullFB: { k: 'pullFB', label: 'Pulled FB%', fmt: F.pct, tip: 'Share of batted balls that are pulled fly balls (25°–50°)' },
+  stuffP: { k: 'stuffP', label: 'Stuff+', html: r => plusBadge(r.stuffP), get: r => r.stuffP, tip: 'Pitch quality from its flight alone (see Glossary). 100 = average pitch in our data' },
+  locP: { k: 'locP', label: 'Location+', html: r => plusBadge(r.locP), get: r => r.locP, tip: 'Quality of his spots for the count (see Glossary). 100 = average' },
+  pitchP: { k: 'pitchP', label: 'Pitching+', html: r => plusBadge(r.pitchP), get: r => r.pitchP, tip: 'Stuff and location together (see Glossary). 100 = average' },
+  vaax: { k: 'vaax', label: 'FB VAA vs x', fmt: v => (v == null ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}°`), tip: 'Four-seam approach angle compared with what is expected at the same plate height. + = flatter than expected, which plays up at the top of the zone' },
   pitches: { k: 'pitches', label: 'Pitches', fmt: F.int },
   swing: { k: 'swing', label: 'Swing%', fmt: F.pct }, zone: { k: 'zone', label: 'Zone%', fmt: F.pct }, zswing: { k: 'zswing', label: 'Z-Swing%', fmt: F.pct },
   chase: { k: 'chase', label: 'Chase%', fmt: F.pct, tip: 'Swings at pitches outside the zone' }, whiff: { k: 'whiff', label: 'Whiff%', fmt: F.pct, tip: 'Misses per swing' },
@@ -602,7 +609,7 @@ const cols = (...ks) => ks.map(k => C[k]);
 function fmtRV(v, nd = 1) { if (v == null || !isFinite(v)) return '—'; const x = +v.toFixed(nd); return (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(nd); }
 const HIT_VIEWS = {
   standard: ['Standard', cols('G', 'PA', 'AB', 'H', '2B', '3B', 'HR', 'BB', 'K', 'HBP', 'avg', 'obp', 'slg', 'ops', 'iso', 'babip', 'woba', 'hitPlus')],
-  statcast: ['Batted Ball', cols('PA', 'hitPlus', 'bbe', 'avgEV', 'ev90', 'maxEV', 'avgLA', 'ssPct', 'brl', 'brlPct', 'hhPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff', 'batSpd', 'maxBat')],
+  statcast: ['Batted Ball', cols('PA', 'hitPlus', 'bbe', 'avgEV', 'ev90', 'maxEV', 'avgLA', 'ssPct', 'brl', 'brlPct', 'hhPct', 'pullPct', 'pullAir', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff', 'batSpd', 'maxBat')],
   discipline: ['Plate Discipline', cols('PA', 'pitches', 'kPct', 'bbPct', 'k2win', 'swing', 'zswing', 'chase', 'whiff', 'zcontact', 'contact', 'fpSwing', 'rv', 'rvSwing', 'rvTake', 'rv100', 'rvGrade')],
   profile: ['Batted-Ball Profile', cols('bbe', 'gbPct', 'ldPct', 'fbPct', 'puPct', 'pullPct', 'centPct', 'oppoPct', 'maxDist')],
   bat: ['Bat Tracking', cols('swingsTracked', 'batSpd', 'batTop', 'maxBat', 'fastPct', 'attackAngle', 'idealAA', 'attackDir', 'sqPct', 'blastPct', 'avgEV', 'hhPct')],
@@ -610,7 +617,7 @@ const HIT_VIEWS = {
 const PIT_VIEWS = {
   standard: ['Standard', cols('G', 'ip', 'PA', 'pitches', 'H', 'HR', 'BB', 'K', 'HBP', 'runs', 'avg', 'obp', 'slg', 'woba', 'kPct', 'bbPct', 'kbb')],
   statcast: ['Contact Allowed', cols('PA', 'bbe', 'avgEV', 'maxEV', 'avgLA', 'brlPct', 'hhPct', 'gbPct', 'xba', 'xslg', 'woba', 'xwoba', 'wobaDiff')],
-  stuff: ['Stuff & Command', cols('pitches', 'fbVelo', 'fbMax', 'fbSpin', 'fbIVB', 'ext', 'zone', 'chase', 'whiff', 'csw', 'fpStrike', 'kPct', 'bbPct', 'rvP')],
+  stuff: ['Stuff & Command', cols('pitches', 'stuffP', 'locP', 'pitchP', 'fbVelo', 'fbMax', 'fbSpin', 'fbIVB', 'vaax', 'ext', 'zone', 'chase', 'whiff', 'csw', 'fpStrike', 'kPct', 'bbPct', 'rvP')],
 };
 const HIT_PCT = [
   ['Hit+', 'hitPlus', 1, v => Math.round(v)], ['xwOBA', 'xwoba', 1, F.avg], ['xBA', 'xba', 1, F.avg], ['xSLG', 'xslg', 1, F.avg], ['Avg Exit Velo', 'avgEV', 1, F.f1], ['Max Exit Velo', 'maxEV', 1, F.f1],
@@ -619,6 +626,7 @@ const HIT_PCT = [
   ['Swing/Take RV', 'rv100', 1, v => fmtRV(v, 2)],
 ];
 const PIT_PCT = [
+  ['Stuff+', 'stuffP', 1, v => Math.round(v)], ['Location+', 'locP', 1, v => Math.round(v)], ['Pitching+', 'pitchP', 1, v => Math.round(v)],
   ['xwOBA', 'xwoba', -1, F.avg], ['xBA', 'xba', -1, F.avg], ['Fastball Velo', 'fbVelo', 1, F.f1], ['Avg Exit Velo', 'avgEV', -1, F.f1],
   ['Chase %', 'chase', 1, F.pct], ['Whiff %', 'whiff', 1, F.pct], ['K %', 'kPct', 1, F.pct], ['BB %', 'bbPct', -1, F.pct],
   ['Barrel %', 'brlPct', -1, F.pct], ['Hard-Hit %', 'hhPct', -1, F.pct], ['GB %', 'gbPct', 1, F.pct], ['Extension', 'ext', 1, F.f1], ['Fastball Spin', 'fbSpin', 1, F.int],
@@ -1812,6 +1820,259 @@ function poolSwitch(hasNcaa) {
 function poolNote(alt, T, pool, unit, meRow) {
   return alt ? `vs ${alt.n} qualified Power 4 ${unit === 'PA' ? 'hitters' : 'pitchers'} (TruMedia ${alt.year})` : `vs ${pool.length} qualified BC ${unit === 'PA' ? 'hitters' : 'pitchers'} (${T.q}+ ${unit})${meRow.q ? '' : ' · below qualifying ' + unit + ', shown faded'}${S.pctPool === 'p4' && S.p4Why ? ` · Power 4 unavailable: ${esc(S.p4Why)}` : ''}`;
 }
+/* ---------- Pitch grades (Stuff+ / Location+ / Pitching+), from scripts/pitchgrades.py ----------
+   Each pitch carries the model's value as an integer (value x meta.grades[k].mult). Any set of pitches is graded on a 100 scale:
+   100 = average pitch in our data, 10 points = 1 SD of pitcher-pitch type averages. */
+const GRADE_DEFS = [['sp', 'stuffP', 'Stuff+'], ['lp', 'locP', 'Location+'], ['pp', 'pitchP', 'Pitching+']];
+function gradePlus(rows, k, min = 10) {
+  const G = S.meta.grades?.[k]; if (!G || !G.sd) return null;
+  let s = 0, n = 0; for (const r of rows) if (r[k] != null) { s += r[k]; n++; }
+  return n >= min ? 100 + 10 * (s / n / (G.mult || 1e4) - G.mu) / G.sd : null;
+}
+const gradesOf = rows => Object.fromEntries(GRADE_DEFS.map(([k, o]) => [o, gradePlus(rows, k)]));
+function plusBadge(v) {
+  if (v == null || !isFinite(v)) return '<span class="muted">—</span>';
+  const p = Math.max(0, Math.min(100, 50 + (v - 100) * 2.5));
+  return `<span class="plus" style="background:${pctColor(p)}">${Math.round(v)}</span>`;
+}
+const GRADE_TIPS = {
+  stuffP: 'Stuff+: how good the pitch is from its flight alone (velo, movement, spin, extension, release, and its gap from his fastball), judged on how often pitches like it get swung through and the runs they save when hitters swing. 100 = average pitch in our data; 10 points = 1 SD.',
+  locP: 'Location+: how good his spots are for the count: expected runs saved from where the pitch crossed the plate, the count, and batter hand. 100 = average.',
+  pitchP: 'Pitching+: stuff and location together: expected runs saved per pitch. 100 = average.',
+};
+const GRADE_COLS = GRADE_DEFS.map(([, o, l]) => ({ k: o, label: l, html: r => plusBadge(r[o]), get: r => r[o], tip: GRADE_TIPS[o] }));
+// runs saved by the pitcher (from the count / base-out run value of every pitch)
+function pitcherRV(rows) {
+  let s = 0, n = 0; for (const r of rows) if (r.rv != null && r.c !== 'IB' && r.c !== 'U' && !r.nt) { s -= r.rv; n++; }
+  return { rvRuns: n ? s : null, rv100P: n >= 15 ? 100 * s / n : null };   // per-100 needs a sample
+}
+const RV_COLS = [
+  { k: 'rvRuns', label: 'RV', fmt: v => fmtRV(v, 1), tip: 'Run value: runs this pitch saved across every time he threw it (count and base-out run value; + = good for the pitcher)' },
+  { k: 'rv100P', label: 'RV/100', fmt: v => fmtRV(v, 2), tip: 'Runs saved per 100 of this pitch, so pitches thrown more or less often can be compared' },
+];
+function gradeLine(rows) {
+  const g = gradesOf(rows); if (g.pitchP == null) return '';
+  return `<div class="grade-line">${GRADE_DEFS.map(([, o, l]) => `<span data-tip="${esc(GRADE_TIPS[o])}"><b>${l}</b> ${plusBadge(g[o])}</span>`).join('')}<span class="muted small">100 = average pitch in our data · see Glossary</span></div>`;
+}
+
+/* ---------- Times through the order, pitch count, by inning ---------- */
+function paGroups(rows) {
+  const by = new Map();
+  for (const r of rows) { const k = `${r.sid}:${r.g}:${r.inn}:${r.top}:${r.pa}`; if (!by.has(k)) by.set(k, []); by.get(k).push(r); }
+  return [...by.values()].sort((a, b) => a[0].sid.localeCompare(b[0].sid) || a[0].g - b[0].g || a[0].inn - b[0].inn || a[0].pa - b[0].pa);
+}
+function ttoTags(rows) {   // nth time this pitcher faced that batter in that game (3 = 3rd or later)
+  const seen = new Map(), out = new Map();
+  for (const pa of paGroups(rows)) { const f = pa[0], k = `${f.sid}:${f.g}:${f.h}`, n = (seen.get(k) || 0) + 1; seen.set(k, n); pa.forEach(r => out.set(r, Math.min(n, 3))); }
+  return out;
+}
+function pitchCounts(rows) {   // pitch number in that outing
+  const n = new Map(), out = new Map();
+  for (const r of rows) { const k = r.sid + ':' + r.g; const c = (n.get(k) || 0) + 1; n.set(k, c); out.set(r, c); }
+  return out;
+}
+const isStrike = r => r.c === 'C' || r.c === 'S' || r.c === 'F' || r.c === 'X';
+function splitRow(name, a) {
+  const st = stats(a), ps = pitchShape(a), tr = a.filter(r => !r.nt);
+  return { name, ...st, fbVelo: ps.fbVelo, fbSpin: ps.fbSpin, strike: tr.length ? tr.filter(isStrike).length / tr.length : null, n: a.length };
+}
+const SPLIT_COLS = () => [{ k: 'name', label: '', l: true }, { k: 'PA', label: 'BF', fmt: F.int }, C.pitches, C.avg, C.woba, C.xwoba, C.kPct, C.bbPct,
+  { k: 'strike', label: 'Strike%', fmt: F.pct }, C.whiff, C.csw, C.fbVelo];
+function ttoTable(rows, id) {
+  const t = ttoTags(rows), parts = [[1, '1st time'], [2, '2nd time'], [3, '3rd+ time']].map(([n, l]) => splitRow(l, rows.filter(r => t.get(r) === n))).filter(o => o.n);
+  if (parts.length < 2) return '<p class="muted small" style="margin:0">Shows once he has faced hitters a second time in an outing.</p>';
+  return table(id, SPLIT_COLS(), parts, { nosort: true });
+}
+function pitchCountTable(rows, id) {
+  const pc = pitchCounts(rows), bands = [[1, 25, '1–25'], [26, 50, '26–50'], [51, 75, '51–75'], [76, 999, '76+']];
+  const parts = bands.map(([a, b, l]) => splitRow(`Pitches ${l}`, rows.filter(r => { const c = pc.get(r); return c >= a && c <= b; }))).filter(o => o.n >= 5);
+  return parts.length ? table(id, SPLIT_COLS(), parts, { nosort: true }) : '';
+}
+// Postgame: how his stuff held up inning by inning (release drift vs his season, in inches)
+function byInningTable(rows, seasonRows, id) {
+  const prim = (() => { const ff = rows.filter(r => r.pt === 'FF').length, si = rows.filter(r => r.pt === 'SI').length; return ff >= si ? 'FF' : 'SI'; })();
+  const sfb = seasonRows.filter(r => r.pt === prim && r.rh != null && r.rsd != null);
+  const mrh = mean(sfb.map(r => r.rh)), mrs = mean(sfb.map(r => r.rsd));
+  const inns = [...new Set(rows.map(r => r.inn))].sort((a, b) => a - b);
+  const out = inns.map(inn => {
+    const a = rows.filter(r => r.inn === inn), fb = a.filter(r => r.pt === prim), st = stats(a);
+    const fv = fb.map(r => r.v).filter(x => x != null), sp = fb.map(r => r.spin).filter(x => x != null);
+    const rh = fb.map(r => r.rh).filter(x => x != null), rs = fb.map(r => r.rsd).filter(x => x != null);
+    return { inn, n: a.length, PA: st.PA, H: st.H, BBH: st.BB + st.HBP, K: st.K, strike: a.length ? a.filter(isStrike).length / a.length : null, whiff: st.whiff, csw: st.csw,
+      fv: mean(fv), fmax: fv.length ? Math.max(...fv) : null, spin: mean(sp),
+      drh: rh.length && mrh != null ? (mean(rh) - mrh) * 12 : null, drs: rs.length && mrs != null ? (mean(rs) - mrs) * 12 * (a[0].th === 'L' ? -1 : 1) : null };
+  });
+  const inch = v => (v == null ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}"`);
+  return table(id, [{ k: 'inn', label: 'Inning', l: true }, { k: 'n', label: 'Pitches', fmt: F.int }, { k: 'PA', label: 'BF', fmt: F.int }, C.H, { k: 'BBH', label: 'BB+HBP', fmt: F.int }, C.K,
+    { k: 'strike', label: 'Strike%', fmt: F.pct }, C.whiff, C.csw, { k: 'fv', label: `${prim} velo`, fmt: F.f1 }, { k: 'fmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: `${prim} spin`, fmt: F.int },
+    { k: 'drh', label: 'Rel Ht Δ', html: r => inch(r.drh), tip: `${prim} release height this inning compared with his season average, in inches` },
+    { k: 'drs', label: 'Rel Side Δ', html: r => inch(r.drs), tip: `${prim} release side compared with his season average, in inches (+ = toward his arm side)` }], out, { nosort: true });
+}
+
+/* ---------- Location heat map (density) + attack zones by pitch type ---------- */
+function heatMap(rows, catcher = false) {
+  const W = 300, H = 330, sgn = catcher ? -1 : 1, X = v => 150 + sgn * v * 60, Y = v => 310 - v * 60;
+  const pts = rows.filter(r => r.px != null && r.pz != null);
+  let g = '';
+  if (pts.length >= 5) {
+    const nx = 26, nz = 28, x0 = -2.3, x1 = 2.3, z0 = 0.2, z1 = 4.9, dx = (x1 - x0) / nx, dz = (z1 - z0) / nz, bw = 0.32;
+    const grid = []; let mx = 0;
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+      const cx = x0 + (i + .5) * dx, cz = z0 + (j + .5) * dz; let s = 0;
+      for (const r of pts) { const a = (r.px - cx) / bw, b = (r.pz - cz) / bw; const q = a * a + b * b; if (q < 9) s += Math.exp(-q / 2); }
+      grid.push([cx, cz, s]); if (s > mx) mx = s;
+    }
+    for (const [cx, cz, s] of grid) {
+      const t = s / mx; if (t < 0.06) continue;
+      g += `<rect x="${(Math.min(X(cx - dx / 2), X(cx + dx / 2))).toFixed(1)}" y="${Y(cz + dz / 2).toFixed(1)}" width="${(dx * 60 + .6).toFixed(1)}" height="${(dz * 60 + .6).toFixed(1)}" fill="${pctColor(Math.round(50 + t * 50))}" fill-opacity="${(0.15 + 0.8 * t).toFixed(2)}"/>`;
+    }
+  }
+  g += `<rect class="zone" x="${Math.min(X(-ZW), X(ZW))}" y="${Y(ZT)}" width="${Math.abs(X(ZW) - X(-ZW))}" height="${Y(ZB) - Y(ZT)}" style="fill:none"/>`;
+  for (let i = 1; i < 3; i++) g += `<line class="grid" x1="${X(-ZW + i * 2 * ZW / 3)}" x2="${X(-ZW + i * 2 * ZW / 3)}" y1="${Y(ZT)}" y2="${Y(ZB)}"/><line class="grid" y1="${Y(ZB + i * (ZT - ZB) / 3)}" y2="${Y(ZB + i * (ZT - ZB) / 3)}" x1="${X(-ZW)}" x2="${X(ZW)}"/>`;
+  const pl = 150 - 0.71 * 60, pw = 1.42 * 60, py = Y(0.25);
+  g += catcher ? `<path class="plate" d="M${pl},${py} h${pw} v6 l-${pw / 2},6 l-${pw / 2},-6 Z"/>` : `<path class="plate" d="M${pl},${py + 12} h${pw} v-6 l-${pw / 2},-6 l-${pw / 2},6 Z"/>`;
+  if (pts.length < 5) g += `<text x="150" y="160" text-anchor="middle">Not enough pitches</text>`;
+  return svg(W, H, g, 'Pitch location heat map');
+}
+function attackByType(rows) {
+  const types = PT_ORDER.filter(k => rows.some(r => r.pt === k && r.az != null));
+  const row = (name, a) => { const z = a.filter(r => r.az != null), n = z.length, f = k => (n ? z.filter(r => r.az === k).length / n : null);
+    return { name, n, heart: f(0), shadow: f(1), chase: f(2), waste: f(3), zone: stats(a).zone }; };
+  const out = types.map(k => ({ ...row(PT[k].n, rows.filter(r => r.pt === k)), pt: k }));
+  out.push({ ...row('All pitches', rows), _total: true });
+  return out;
+}
+function attackTable(rows, id) {
+  const azc = (k, l) => ({ k, label: l, fmt: F.pct, tip: { heart: 'Middle of the zone', shadow: 'Edges, about a ball width in and out of the zone (Edge%)', chase: 'Just off the plate', waste: 'Well off the plate' }[k] });
+  const data = attackByType(rows), tot = data.pop();
+  return table(id, [{ k: 'name', label: 'Pitch', l: true, html: r => (r.pt ? ptDot(r.pt) : '') + esc(r.name) }, { k: 'n', label: '#', fmt: F.int },
+    azc('heart', 'Heart%'), { ...azc('shadow', 'Edge%'), label: 'Edge%' }, azc('chase', 'Chase zone%'), azc('waste', 'Waste%'), C.zone], data, { sort: 'n', total: { ...tot, _label: 'All pitches' } });
+}
+
+/* ---------- Fastball approach angle (VAA) vs height ---------- */
+function vaaFit(se) {   // league line for four-seamers: VAA = a + b * plate height
+  if (se.cache.vaaFit !== undefined) return se.cache.vaaFit;
+  const all = se.rows.filter(r => r.pt === 'FF' && r.vaa != null && r.pz != null && r.pz > 0.5 && r.pz < 5 && !r.nt);
+  if (all.length < 200) return (se.cache.vaaFit = null);
+  const mx = mean(all.map(r => r.pz)), my = mean(all.map(r => r.vaa));
+  let sxy = 0, sxx = 0; for (const r of all) { sxy += (r.pz - mx) * (r.vaa - my); sxx += (r.pz - mx) ** 2; }
+  const b = sxy / sxx; return (se.cache.vaaFit = { a: my - b * mx, b, n: all.length });
+}
+function vaaX(se, rows) {   // average VAA above expected for his four-seamers (+ = flatter than expected = more "rise")
+  const f = vaaFit(se); if (!f) return null;
+  const ff = rows.filter(r => r.pt === 'FF' && r.vaa != null && r.pz != null && !r.nt);
+  return ff.length >= 15 ? mean(ff.map(r => r.vaa - (f.a + f.b * r.pz))) : null;
+}
+function vaaChart(se, rows) {
+  const f = vaaFit(se), ff = rows.filter(r => r.pt === 'FF' && r.vaa != null && r.pz != null && !r.nt);
+  if (!f || ff.length < 15) return '<p class="muted small" style="margin:0">Shows once he has 15+ tracked four-seam fastballs.</p>';
+  const W = 360, H = 260, m = 40, z0 = 1, z1 = 4.5, v0 = -9, v1 = -2.5;
+  const X = z => m + (z - z0) / (z1 - z0) * (W - m - 12), Y = v => 14 + (v1 - v) / (v1 - v0) * (H - 54);
+  let g = '';
+  for (let v = -9; v <= -3; v++) g += `<line class="grid" x1="${m}" x2="${W - 12}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m - 5}" y="${Y(v) + 4}" text-anchor="end">${v}°</text>`;
+  for (let z = 1.5; z <= 4.5; z += 0.5) g += `<line class="grid" x1="${X(z)}" x2="${X(z)}" y1="14" y2="${H - 40}"/>${Number.isInteger(z) ? `<text x="${X(z)}" y="${H - 26}" text-anchor="middle">${z} ft</text>` : ''}`;
+  g += `<rect x="${X(ZB)}" y="14" width="${X(ZT) - X(ZB)}" height="${H - 54}" fill="var(--surface-2)" fill-opacity=".35"/>`;
+  g += `<text x="${W / 2}" y="${H - 8}" text-anchor="middle">Plate height (shaded = strike zone)</text><text x="12" y="${H / 2 - 20}" text-anchor="middle" transform="rotate(-90 12 ${H / 2 - 20})">Approach angle</text>`;
+  g += `<line x1="${X(z0)}" y1="${Y(f.a + f.b * z0)}" x2="${X(z1)}" y2="${Y(f.a + f.b * z1)}" stroke="var(--muted)" stroke-width="2" stroke-dasharray="5 4"/>`;
+  const cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  g += ff.map(r => `<circle cx="${X(cl(r.pz, z0, z1)).toFixed(1)}" cy="${Y(cl(r.vaa, v0, v1)).toFixed(1)}" r="2.6" fill="${PT.FF.c}" fill-opacity=".55"><title>${F.f1(r.v)} mph at ${r.pz.toFixed(2)} ft · VAA ${r.vaa.toFixed(1)}°</title></circle>`).join('');
+  return svg(W, H, g, 'Four-seam approach angle by plate height');
+}
+
+/* ---------- Release consistency ---------- */
+function releaseTable(rows, id) {
+  const types = PT_ORDER.filter(k => rows.filter(r => r.pt === k && r.rh != null && r.rsd != null).length >= 5);
+  const fbk = rows.filter(r => r.pt === 'FF').length >= rows.filter(r => r.pt === 'SI').length ? 'FF' : 'SI';
+  const at = k => rows.filter(r => r.pt === k && r.rh != null && r.rsd != null);
+  const fb = at(fbk), fh = mean(fb.map(r => r.rh)), fs = mean(fb.map(r => r.rsd));
+  const sd = a => { const m0 = mean(a); return a.length > 1 ? Math.sqrt(a.reduce((s, x) => s + (x - m0) ** 2, 0) / (a.length - 1)) : null; };
+  const out = types.map(k => { const a = at(k), h = a.map(r => r.rh), s = a.map(r => r.rsd);
+    const spread = Math.sqrt((sd(h) || 0) ** 2 + (sd(s) || 0) ** 2) * 12;
+    const gap = fb.length && k !== fbk ? Math.hypot(mean(h) - fh, mean(s) - fs) * 12 : null;
+    return { pt: k, n: a.length, rh: mean(h), rs: mean(s) * (a[0].th === 'L' ? -1 : 1), ext: mean(a.map(r => r.ext).filter(x => x != null)), spread, gap }; });
+  return table(id, [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true }, { k: 'n', label: '#', fmt: F.int },
+    { k: 'rh', label: 'Rel Ht', fmt: v => (v == null ? '—' : v.toFixed(2) + ' ft') }, { k: 'rs', label: 'Rel Side', fmt: v => (v == null ? '—' : v.toFixed(2) + ' ft'), tip: 'Toward his arm side' },
+    { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'spread', label: 'Spread', fmt: v => (v == null ? '—' : v.toFixed(1) + '"'), tip: 'How much his release point moves around for this pitch (1 SD, height and side combined, in inches). Smaller = more repeatable.' },
+    { k: 'gap', label: `Gap vs ${fbk}`, fmt: v => (v == null ? '—' : v.toFixed(1) + '"'), tip: `Distance between this pitch's average release point and his ${PT[fbk].n}'s, in inches. A big gap can tip the pitch.` }], out, { sort: 'n' });
+}
+
+/* ---------- Hitters: rolling trends, damage by pitch type, count approach, velo bands ---------- */
+function gamesOf(rows) {
+  const by = new Map(); for (const r of rows) { const k = r.sid + ':' + r.g; if (!by.has(k)) by.set(k, { d: r.d, g: r.g, sid: r.sid, rows: [] }); by.get(k).rows.push(r); }
+  return [...by.values()].sort((a, b) => a.d.localeCompare(b.d) || a.g - b.g);
+}
+function miniLine(series, { title, fmt, avg, lo, hi, note, better = 1 }) {
+  const W = 320, H = 150, m = 46;
+  const all = series.flatMap(s => s.pts.map(p => p[1])).concat(avg != null ? [avg] : []).filter(v => v != null);
+  if (!all.length) return '';
+  let a = lo ?? Math.min(...all), b = hi ?? Math.max(...all); if (b - a < 1e-9) { a -= 0.05; b += 0.05; } const pad = (b - a) * 0.12; a -= pad; b += pad;
+  const n = Math.max(...series.map(s => s.pts.length)), X = i => m + (n <= 1 ? 0.5 : i / (n - 1)) * (W - m - 10), Y = v => 10 + (b - v) / (b - a) * (H - 34);
+  let g = '';
+  for (const t of [a + pad, (a + b) / 2, b - pad]) g += `<line class="grid" x1="${m}" x2="${W - 10}" y1="${Y(t)}" y2="${Y(t)}"/><text x="${m - 4}" y="${Y(t) + 4}" text-anchor="end">${fmt(t)}</text>`;
+  if (avg != null) g += `<line x1="${m}" x2="${W - 10}" y1="${Y(avg)}" y2="${Y(avg)}" stroke="var(--muted)" stroke-dasharray="4 3"/><text x="${W - 12}" y="${Y(avg) - 4}" text-anchor="end" style="font-size:10px">season ${fmt(avg)}</text>`;
+  for (const s of series) {
+    const p = s.pts.map(([i, v]) => (v == null ? null : [X(i), Y(v)])).filter(Boolean); if (!p.length) continue;
+    g += `<path d="M${p.map(q => q.map(x => x.toFixed(1)).join(',')).join(' L')}" fill="none" stroke="${s.c}" stroke-width="2.2" ${s.dash ? 'stroke-dasharray="4 3"' : ''}/>`;
+    const last = s.pts[s.pts.length - 1]; if (last && last[1] != null && !s.dash) g += `<circle cx="${X(last[0]).toFixed(1)}" cy="${Y(last[1]).toFixed(1)}" r="3.5" fill="${s.c}"/>`;
+  }
+  const lastV = series[0].pts.length ? series[0].pts[series[0].pts.length - 1][1] : null;
+  const dir = lastV != null && avg != null ? ((lastV - avg) * better > 0 ? 'up' : (lastV - avg) * better < 0 ? 'down' : '') : '';
+  return `<div class="mini"><div class="mini-h"><b>${esc(title)}</b><span class="dlt ${dir}">${lastV != null ? fmt(lastV) : '—'}</span></div>${svg(W, H, g, title)}${note ? `<div class="muted small">${note}</div>` : ''}</div>`;
+}
+function rollingTrends(rows, se) {
+  const gl = gamesOf(rows.filter(r => !r.nt));
+  if (gl.length < 4) return '';
+  const Wn = 15, pts = gl.map((_, i) => stats(gl.slice(Math.max(0, i - Wn + 1), i + 1).flatMap(x => x.rows)));
+  const season = stats(rows.filter(r => !r.nt));
+  const s = (k, c = 'var(--maroon-ink, #c8102e)') => ({ c, pts: pts.map((o, i) => [i, o[k]]) });
+  const pf = v => F.pct(v) + '%';
+  const luck = season.xwoba != null && season.woba != null ? season.woba - season.xwoba : null;
+  return `<section class="panel"><div class="panel-h"><h2>Trends</h2><span class="note">Rolling ${Math.min(Wn, gl.length)}-game window · ${gl.length} games · dashed line = his ${esc(se.label)} average</span></div>
+    <div class="mini-grid">
+      ${miniLine([s('xwoba', 'var(--gold)'), { ...s('woba', 'var(--muted)'), dash: true }], { title: 'xwOBA (solid) vs wOBA (dashed)', fmt: F.avg, avg: season.xwoba, note: luck == null ? '' : `Season wOBA ${F.avg(season.woba)} vs xwOBA ${F.avg(season.xwoba)}: ${Math.abs(luck) < 0.015 ? 'results match his contact' : luck < 0 ? `<b>unlucky</b> by ${F.avg(-luck)} (results trail his contact)` : `<b>lucky</b> by ${F.avg(luck)} (results ahead of his contact)`}` })}
+      ${miniLine([s('chase', 'var(--az-chase)')], { title: 'Chase %', fmt: pf, avg: season.chase, better: -1 })}
+      ${miniLine([s('whiff', 'var(--az-shadow)')], { title: 'Whiff %', fmt: pf, avg: season.whiff, better: -1 })}
+      ${miniLine([s('hhPct', 'var(--az-heart)')], { title: 'Hard-hit %', fmt: pf, avg: season.hhPct })}
+    </div></section>`;
+}
+function damageByType(rows, metric) {
+  const groups = [['Fastballs', 'FB'], ['Breaking', 'BR'], ['Offspeed', 'OS']];
+  return groups.map(([g]) => { const a = rows.filter(r => GROUP[r.pt] === g && !r.nt);
+    return `<div class="dmg-cell"><div class="mini-h"><b>${g}</b><span class="muted small">${F.int(a.length)} pitches · xwOBA ${F.avg(stats(a).xwoba)}</span></div><div class="chart-box">${zoneChart(a, metric, 'hit')}</div></div>`; }).join('');
+}
+function countGrid(rows, teamRows) {
+  const tr = rows.filter(r => !r.nt), tt = teamRows.filter(r => !r.nt);
+  const at = (a, b, s) => a.filter(r => r.b === b && r.s === s);
+  let cells = '';
+  for (let s = 0; s <= 2; s++) for (let b = 0; b <= 3; b++) {
+    const a = at(tr, b, s), t = at(tt, b, s), st = stats(a), ts = stats(t);
+    const d = st.swing != null && ts.swing != null ? st.swing - ts.swing : null;
+    const bg = d == null || a.length < 4 ? 'var(--surface-2)' : pctColor(Math.max(0, Math.min(100, 50 + d * 220)));
+    const tip = `<b>${b}-${s} count</b><br>${a.length} pitches · swing ${F.pct(st.swing)}% (team ${F.pct(ts.swing)}%)<br>chase ${F.pct(st.chase)}% · whiff ${F.pct(st.whiff)}%${st.PA ? `<br>PA ending here: ${st.PA} · xwOBA ${F.avg(st.xwoba)}` : ''}`;
+    cells += `<div class="cg-cell" style="background:${bg}" data-tip="${esc(tip)}"><span class="cg-c">${b}-${s}</span><b>${a.length >= 4 ? F.pct(st.swing) + '%' : '—'}</b><span class="cg-n">${a.length} p</span></div>`;
+  }
+  const f = (a, test) => a.filter(test), sw = a => stats(a).swing, ch = a => stats(a).chase;
+  const keys = [
+    ['1st-pitch swing', r => r.b === 0 && r.s === 0, sw], ['Hitter\'s counts swing', r => (r.b === 2 && r.s === 0) || (r.b === 3 && r.s <= 1) || (r.b === 2 && r.s === 1), sw],
+    ['3-1 swing', r => r.b === 3 && r.s === 1, sw], ['2-strike chase', r => r.s === 2, ch], ['Behind (more strikes) chase', r => r.s > r.b, ch],
+  ];
+  const tiles = keys.map(([l, test, fn]) => { const v = fn(f(tr, test)), t = fn(f(tt, test));
+    return `<div class="tile"><div class="tile-v">${v == null ? '—' : F.pct(v) + '%'}</div><div class="tile-l">${l}<br><span class="muted">team ${t == null ? '—' : F.pct(t) + '%'}</span></div></div>`; }).join('');
+  return `<div class="strip cg-strip">${tiles}</div>
+    <div class="cg-wrap"><div class="cg-axis"><span>0 K</span><span>1 K</span><span>2 K</span></div><div><div class="cg-top"><span>0 balls</span><span>1</span><span>2</span><span>3</span></div><div class="cg-grid">${cells}</div></div></div>
+    <p class="muted small" style="margin:6px 0 0">Swing % in each count. Red = swings more than the BC team in that count, blue = less. Hover for chase, whiff and results.</p>`;
+}
+function veloBands(rows) {
+  const tr = rows.filter(r => !r.nt && r.v != null);
+  const bands = [['95+ mph', 95, 200], ['90–94.9', 90, 95], ['85–89.9', 85, 90], ['80–84.9', 80, 85], ['Under 80', 0, 80]];
+  return bands.map(([name, a, b]) => ({ name, ...stats(tr.filter(r => r.v >= a && r.v < b)) })).filter(o => o.pitches);
+}
+
+/* ---------- Spray by pitch type + pull profile ---------- */
+function pullLine(st) {
+  return `<p class="muted small" style="margin:6px 0 0">Pull ${F.pct(st.pullPct)}% · Straight ${F.pct(st.centPct)}% · Oppo ${F.pct(st.oppoPct)}% · <b data-tip="${esc('Pulled balls hit in the air (launch angle 10°+): line drives and fly balls to the pull side. The strongest batted-ball predictor of power.')}">Pulled air ${F.pct(st.pullAir)}%</b> · Pulled FB ${F.pct(st.pullFB)}%</p>`;
+}
+
 function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
   const se = S.seasons[ui.season], rows = se.byH.get(i) || [], me = stats(rows);
   const T = seasonHitters(se), meRow = T.rows.find(o => o.i === i) || { ...me, q: false };
@@ -1833,8 +2094,12 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
       <p class="muted small" style="margin:-4px 0 10px">${esc(se.label)} · ${poolNote(alt, T, pool, 'PA', meRow)}</p>
       ${pctBars(HIT_PCT.filter(d => (d[1] !== 'batSpd' || pool.some(o => o.batSpd != null)) && (d[1] !== 'hitPlus' || hp)), meRow, pool, alt)}
       ${hp ? `<p class="muted small" style="margin:8px 0 0"><b>Hit+ ${Math.round(hp.hit)}</b>${Object.keys(hp.groups).filter(g => g !== 'ALL').length ? ' · ' + Object.entries(hp.groups).map(([g, v]) => `${{ FB: 'Fastballs', BR: 'Breaking', OS: 'Offspeed' }[g] || g} ${Math.round(v)}`).join(' · ') : ''} · ${hp.src === 'TruMedia' ? 'from TruMedia' : 'from TrackMan'}, scaled to D1 ${hp.year} (100 = average)</p>` : ''}</div>
-    <div class="panel"><div class="panel-h"><h2>Spray chart</h2><span class="note">${esc(se.label)}</span></div><div class="chart-box">${sprayChart(rows)}</div></div>
+    <div class="panel"><div class="panel-h"><h2>Spray chart</h2>${segmented('spray-grp', [['all', 'All'], ['Fastballs', 'FB'], ['Breaking', 'BR'], ['Offspeed', 'OS']], ui.sprayG || 'all', v => {
+        ui.sprayG = v; const a = sprayRows(rows, v); $('#spraybox').innerHTML = sprayChart(a); $('#spray-pull').innerHTML = pullLine(stats(a));
+        $$('#spray-grp button').forEach(b => { b.classList.toggle('on', b.dataset.v === v); b.setAttribute('aria-pressed', b.dataset.v === v); }); })}</div>
+      <div class="chart-box" id="spraybox">${sprayChart(sprayRows(rows, ui.sprayG))}</div><div id="spray-pull">${pullLine(stats(sprayRows(rows, ui.sprayG)))}</div></div>
   </section>
+  ${rollingTrends(rows, se)}
   ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'hit')}
   ${decisionPanel(rows, se, i)}
   <section><div class="panel-h"><h2>Standard</h2>${all.ntPA ? `<span class="note">Includes ${all.ntPA} PA from results-only games; batted-ball and discipline stats use TrackMan games only</span>` : ''}</div>${table('t-ph-std', [sCol, ...HIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
@@ -1848,6 +2113,16 @@ function hitterBody(i, p, seasons, ui, alt, hasNcaa) {
       <div class="chart-box" style="max-width:340px" id="zbox">${zoneChart(rows, ui.zm, 'hit')}</div><p class="muted small" style="text-align:center;margin:4px 0 0">Catcher's view · red = better for the hitter</p></div>
     <div class="panel"><div class="panel-h"><h2>Exit velo &amp; launch angle</h2><span class="note">Shaded box = 95+ mph at 8°–32°</span></div>${evlaChart(rows)}
       <div class="legend">${['1B', '2B', '3B', 'HR', 'OUT'].map(k => `<span><i style="background:${RES_COLOR[k]}"></i>${k === 'OUT' ? 'Out / other' : RES_NAME[k]}</span>`).join('')}</div></div>
+  </section>
+  <section class="panel"><div class="panel-h"><h2>Damage by pitch type</h2>
+      <select id="dmg-m" aria-label="Metric">${[['xwoba', 'xwOBA'], ['dmg', 'Damage (xwOBA on contact)'], ['whiff', 'Whiff %'], ['swing', 'Swing %'], ['pitches', 'Pitches seen']].map(([v, l]) => `<option value="${v}" ${(ui.dmgM || 'xwoba') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="dmg-grid" id="dmgbox">${damageByType(rows, ui.dmgM || 'xwoba')}</div>
+    <p class="muted small" style="margin:4px 0 0">Catcher's view · red = better for the hitter · a zone needs 2+ results to show xwOBA</p></section>
+  <section class="grid2">
+    <div class="panel"><div class="panel-h"><h2>Count approach</h2><span class="note">${esc(se.label)}</span></div>${countGrid(rows, se.rows.filter(r => isBC(S.players[r.h]?.t)))}</div>
+    <div class="panel"><div class="panel-h"><h2>By pitch velocity</h2><span class="note">Every pitch type</span></div>
+      ${table('t-ph-velo', [{ k: 'name', label: 'Velo', l: true }, C.pitches, C.swing, C.whiff, C.chase, C.PA, C.avg, C.slg, C.xwoba, C.hhPct], veloBands(rows), { nosort: true })}
+      <p class="muted small" style="margin:6px 0 0">Results count the plate appearances that ended on a pitch in that range.</p></div>
   </section>
   ${playerExecution(i, se, me)}
   <section><div class="panel-h"><h2>Splits</h2><span class="note">${esc(se.label)}</span></div>
@@ -1895,14 +2170,34 @@ function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
       ${ptChips('pt-chips', types, ui.active, () => redrawPitcherCharts(rows, ui))}</div>
   </section>
   <section><div class="panel-h"><h2>Pitch arsenal</h2><span class="note">${esc(se.label)}</span></div>
+    ${gradeLine(rows)}
     ${table('t-pp-ars', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
-      { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'useR', label: 'vs RHH%', fmt: F.pct }, { k: 'useL', label: 'vs LHH%', fmt: F.pct },
+      { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, ...GRADE_COLS, ...RV_COLS, { k: 'useR', label: 'vs RHH%', fmt: F.pct }, { k: 'useL', label: 'vs LHH%', fmt: F.pct },
       { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, ...XMOV_COLS,
       { k: 'vaa', label: 'VAA', fmt: F.f1 }, { k: 'rh', label: 'Rel Ht', fmt: F.f1 }, { k: 'ext', label: 'Ext', fmt: F.f1 },
       { k: 'whiff', label: 'Whiff%', fmt: F.pct }, { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'chase', label: 'Chase%', fmt: F.pct }, { k: 'zone', label: 'Zone%', fmt: F.pct },
       { k: 'putaway', label: 'PutAway%', fmt: F.pct }, { k: 'PA', label: 'PA', fmt: F.int }, { k: 'ba', label: 'BA', fmt: F.avg }, { k: 'xba', label: 'xBA', fmt: F.avg }, { k: 'avgEV', label: 'EV', fmt: F.f1 }, { k: 'xwoba', label: 'xwOBA', fmt: F.avg }],
       ars, { sort: 'n' })}</section>
   ${swingTakeChart(rows, se.rows.filter(r => !r.nt), 'pit')}
+  <section class="grid2">
+    <div class="panel"><div class="panel-h"><h2>Location heat map</h2><span class="note">Pitcher's view</span></div>
+      <div class="controls" style="margin:0 0 6px"><select id="hm-pt" aria-label="Pitch type"><option value="">All pitches</option>${types.map(k => `<option value="${k}" ${ui.hmPt === k ? 'selected' : ''}>${PT[k].n}</option>`).join('')}</select>
+        ${segmented('hm-side', [['all', 'All'], ['R', 'vs RHH'], ['L', 'vs LHH']], ui.hmSide || 'all', v => { ui.hmSide = v; redrawHeat(rows, ui); })}</div>
+      <div class="chart-box" style="max-width:320px" id="hmbox">${heatMap(heatRows(rows, ui))}</div></div>
+    <div class="panel"><div class="panel-h"><h2>Attack zones by pitch</h2><span class="note" id="hm-note">${ui.hmSide && ui.hmSide !== 'all' ? `vs ${ui.hmSide}HH` : 'All batters'}</span></div>
+      <div id="hm-az">${attackTable(heatRows(rows, ui, true), 't-pp-az')}</div>
+      <p class="muted small" style="margin:6px 0 0">Edge% = the shadow zone (a ball width in and out of the strike zone), where pitchers want to live.</p></div>
+  </section>
+  <section class="grid2">
+    <div class="panel"><div class="panel-h"><h2>Four-seam approach angle</h2><span class="note">${(() => { const v = vaaX(se, rows); return v == null ? '' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}° vs expected · ${v >= 0 ? 'flatter' : 'steeper'} than average for his heights`; })()}</span></div>
+      <div class="chart-box" style="max-width:400px">${vaaChart(se, rows)}</div>
+      <p class="muted small" style="margin:4px 0 0">Dashed line = average four-seamer at each height (all pitchers this season). Dots above the line come in flatter, which plays up at the top of the zone.</p></div>
+    <div class="panel"><div class="panel-h"><h2>Release consistency</h2></div>${releaseTable(rows, 't-pp-rel')}</div>
+  </section>
+  <section class="grid2">
+    <div class="panel"><div class="panel-h"><h2>Times through the order</h2><span class="note">${esc(se.label)}</span></div>${ttoTable(rows, 't-pp-tto')}</div>
+    <div class="panel"><div class="panel-h"><h2>By pitch count</h2><span class="note">Pitch number in the outing</span></div>${pitchCountTable(rows, 't-pp-pc') || '<p class="muted small" style="margin:0">Not enough pitches yet.</p>'}</div>
+  </section>
   <section><div class="panel-h"><h2>Pitching</h2></div>${table('t-pp-std', [sCol, ...PIT_VIEWS.standard[1]], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section><div class="panel-h"><h2>Stuff, command &amp; contact</h2></div>${table('t-pp-sc', [sCol, C.fbVelo, C.fbMax, C.fbSpin, C.fbIVB, C.ext, C.zone, C.chase, C.whiff, C.csw, C.fpStrike, C.avgEV, C.hhPct, C.brlPct, C.gbPct, C.xba, C.xwoba], perSeason, { sort: 'name', asc: true, total: seasons.length > 1 ? all : null })}</section>
   <section class="grid2">
@@ -1918,6 +2213,15 @@ function pitcherBody(i, p, seasons, ui, alt, hasNcaa) {
   <section><div class="panel-h"><h2>Game log</h2><span class="note">${esc(se.label)} · click a date for the pitch-by-pitch breakdown</span></div>
     ${table('t-pp-log', [{ k: 'd', label: 'Date', l: true, html: r => logLink(se, r, 'pit', i) }, { k: 'opp', label: 'Opp', l: true }, C.ip, C.PA, C.pitches, C.H, C.BB, C.K, C.runs, C.whiff, C.csw, C.fbVelo, { k: 'maxVelo', label: 'Max Velo', fmt: F.f1 }, C.xwoba], glog, { sort: 'd', asc: false })}</section>`;
 }
+function heatRows(rows, ui, allTypes = false) {
+  return rows.filter(r => (allTypes || !ui.hmPt || r.pt === ui.hmPt) && (!ui.hmSide || ui.hmSide === 'all' || r.bs === ui.hmSide));
+}
+function redrawHeat(rows, ui) {
+  const hb = $('#hmbox'); if (hb) hb.innerHTML = heatMap(heatRows(rows, ui));
+  const az = $('#hm-az'); if (az) az.innerHTML = attackTable(heatRows(rows, ui, true), 't-pp-az');
+  const nt = $('#hm-note'); if (nt) nt.textContent = ui.hmSide && ui.hmSide !== 'all' ? `vs ${ui.hmSide}HH` : 'All batters';
+  $$('#hm-side button').forEach(b => { b.classList.toggle('on', b.dataset.v === (ui.hmSide || 'all')); b.setAttribute('aria-pressed', b.dataset.v === (ui.hmSide || 'all')); });
+}
 function redrawPitcherCharts(rows, ui) {
   const mv = $('#mvbox'), lb = $('#locbox'), rb = $('#relbox');
   if (mv) mv.innerHTML = movementChart(rows, ui.active);
@@ -1925,7 +2229,11 @@ function redrawPitcherCharts(rows, ui) {
   if (rb) rb.innerHTML = releaseChart(rows, ui.active);
   $$('#pt-chips .chip').forEach(b => { const on = ui.active.has(b.dataset.k); b.classList.toggle('off', !on); b.setAttribute('aria-pressed', on); });
 }
+function sprayRows(rows, g) { return !g || g === 'all' ? rows : rows.filter(r => GROUP[r.pt] === g); }
 function bindPlayer(i, p, role, ui) {
+  const se0 = S.seasons[ui.season];
+  const dm = $('#dmg-m'); if (dm) dm.onchange = () => { ui.dmgM = dm.value; $('#dmgbox').innerHTML = damageByType(se0.byH.get(i) || [], ui.dmgM); };
+  const hp = $('#hm-pt'); if (hp) hp.onchange = () => { ui.hmPt = hp.value; redrawHeat(se0.byP.get(i) || [], ui); };
   const zm = $('#zm');
   if (zm) zm.onchange = () => { ui.zm = zm.value; const se = S.seasons[ui.season]; $('#zbox').innerHTML = zoneChart(se.byH.get(i) || [], ui.zm, 'hit'); };
 }
@@ -2356,11 +2664,14 @@ async function pagePlayerGame(sid, gi, role, key) {
     tiles = [[F.ip(st.outs), 'IP'], [F.int(st.PA), 'Batters'], [F.int(st.pitches), 'Pitches'], [F.pct(strikes / rows.length), 'Strike %'], [F.int(st.K), 'SO'],
       [F.int(st.BB + st.HBP), 'BB + HBP'], [F.int(st.H), 'H'], [F.int(Math.round((st.whiff || 0) * (st.swing || 0) * st.pitches)), 'Whiffs'], [F.pct(st.csw), 'CSW %'], [F.f1(ps.maxVelo), 'Max velo']];
     const ars = arsenal(rows);
-    extra = `<section><div class="panel-h"><h2>Pitch mix</h2></div>${table('t-pg-ars', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
-      { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int },
+    extra = `<section><div class="panel-h"><h2>Pitch mix</h2></div>${gradeLine(rows)}${table('t-pg-ars', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true },
+      { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, ...GRADE_COLS, ...RV_COLS, { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int },
       { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, ...XMOV_COLS, { k: 'ext', label: 'Ext', fmt: F.f1 }, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'whiff', label: 'Whiff%', fmt: F.pct },
       { k: 'csw', label: 'CSW%', fmt: F.pct }, { k: 'avgEV', label: 'EV', fmt: F.f1 }], ars, { sort: 'n' })}</section>
       ${pgMovement(rows, (se.byP.get(i) || []).filter(r => !r.nt), se.label)}
+      <section><div class="panel-h"><h2>By inning</h2><span class="note">How his stuff held up · release Δ = compared with his season average</span></div>${byInningTable(rows, (se.byP.get(i) || []).filter(r => !r.nt), 't-pg-inn')}</section>
+      <section class="grid2"><div class="panel"><div class="panel-h"><h2>Times through the order</h2><span class="note">This game</span></div>${ttoTable(rows, 't-pg-tto')}</div>
+        <div class="panel"><div class="panel-h"><h2>By pitch count</h2><span class="note">This game</span></div>${pitchCountTable(rows, 't-pg-pc') || '<p class="muted small" style="margin:0">Not enough pitches.</p>'}</div></section>
       <section class="grid2">
         <div class="panel"><div class="panel-h"><h2>Pitch locations</h2><span class="note">Pitcher's view</span></div><div class="chart-box" style="max-width:340px">${locationChart(rows, new Set(PT_ORDER))}</div>
           <div class="legend">${ars.map(a => `<span><i style="background:${PT[a.pt].c}"></i>${PT[a.pt].n}</span>`).join('')}</div></div>
@@ -2481,6 +2792,18 @@ function pageGlossary() {
     ['PutAway %', 'Strikeouts on a pitch type ÷ two-strike pitches of that type.'],
     ['IVB / HB', 'Induced vertical break and horizontal break in inches, from TrackMan. Movement, release and pitch location charts on pitcher pages are drawn from the pitcher\'s point of view. Hitter zone profiles and hitter game charts are drawn from the catcher\'s point of view.'],
     ['Run Value', 'How many runs each pitch added or took away, from the count and base-out run value matrix (RE288): the change in run expectancy from before the pitch to after it, plus any runs that scored. TrackMan does not record baserunners, so the base state is rebuilt from play results. The count matrix is lightly repaired where small samples made it illogical (so a ball never costs the hitter and a strike never helps him), and run expectancy for each base-out state comes from this site\'s games, smoothed so that more runners or fewer outs always means more runs. The Data status page lists every adjustment. Hitter pages show runs added by the hitter; pitcher pages show runs saved by the pitcher.'],
+    ['Stuff+', 'How good a pitch is from its flight alone: velocity, induced vertical and horizontal break, spin, extension, release height and side, and how different it is from his main fastball (velo and movement), plus whether the batter is same- or opposite-handed. Location is left out. A model trained on every TrackMan pitch in our data (BC and opponents) learns how often pitches like it get swung through and how many runs they save when hitters swing; Stuff+ is half each. A pitcher is never graded on his own pitches (the model is fit without them). 100 = average pitch in our data; every 10 points = 1 standard deviation. In testing it tracked real whiff rates well, including from one season to the next.'],
+    ['Location+', 'How good his spots are: the runs a pitch is expected to save given where it crossed the plate, the count and batter hand, ignoring what the ball itself did. Rewards strikes on the edges early and chase pitches with two strikes. 100 = average.'],
+    ['Pitching+', 'Stuff and location together: the runs a pitch is expected to save from its flight, spot, count and batter hand. Balls in play are valued by their contact quality (exit velo and launch angle), not where they landed. 100 = average.'],
+    ['RV by pitch', 'Run value by pitch type: the runs each pitch actually saved across every time he threw it, from the count and base-out run value of each pitch (+ = good for the pitcher). RV/100 puts pitches thrown more or less often on the same footing. It shows which pitch is actually working; Stuff+ shows which one should.'],
+    ['Times through the order', 'Splits by the 1st, 2nd and 3rd+ time a pitcher faces the same hitter in an outing. Most pitchers get hit harder each time through; a big jump says hitters are timing him up.'],
+    ['Edge%', 'Share of pitches in the shadow zone, about a ball width inside and outside the edge of the strike zone. Heart% is the middle of the zone, Chase zone% just off the plate, Waste% well off it (Baseball Savant attack zones).'],
+    ['Approach angle (VAA)', 'The angle a pitch comes into the plate. Four-seamers thrown higher are naturally flatter, so we compare each one with the average at the same height. A fastball flatter than expected (+) plays up at the top of the zone and should live there.'],
+    ['Release spread', 'How much a pitcher\'s release point moves around for a pitch (1 standard deviation of height and side combined, in inches). Smaller = more repeatable. Gap vs FB is how far that pitch\'s release is from his fastball\'s; a big gap can tip pitches. On the postgame page, release Δ by inning shows drift as he tires.'],
+    ['Trends', 'Rolling numbers over his last 15 games (or all games so far): xwOBA with wOBA dashed behind it, chase %, whiff % and hard-hit %. The dashed flat line is his season average. When wOBA sits well below xwOBA he has been unlucky; well above, lucky.'],
+    ['Pulled air %', 'Share of batted balls that are pulled and in the air (launch angle 10°+). Pulling the ball in the air is the strongest batted-ball predictor of home-run power. Pulled FB% is pulled fly balls only (25°–50°).'],
+    ['Count approach', 'Swing % in each of the 12 counts, colored against the BC team in the same count (red = swings more, blue = less), with first-pitch swing %, swing % in hitter\'s counts, 3-1 swing % and chase % with two strikes and when behind.'],
+    ['By pitch velocity', 'A hitter\'s results against pitches in each velocity range (95+, 90–95, 85–90, 80–85, under 80): swing, whiff and chase rates, plus the plate appearances that ended on a pitch in that range.'],
     ['Good decision', 'Game pages grade every pitch a hitter sees as a good or bad swing/take decision. It judges the decision, not the result. Start: for the pitch\'s attack zone and the count, swinging and taking are each worth a certain number of runs on average across that season\'s data. Then his damage heat map (xwOBA on contact in each zone, on his player page under Zone profile → Damage) adjusts it: where he does more damage than the league, swinging is worth more; where he does less, taking is. Small samples are pulled toward his overall level. He made a good decision if he picked the option worth more for him. Hover a Good/Bad tag to see his damage in that zone.'],
     ['Attack zones', 'Baseball Savant\'s split of the strike zone: Heart (green) is the middle of the zone, Shadow (yellow) the edges, about a ball\'s width in and out, Chase (red) just off the plate and Waste (grey) well off it. Swing runs and take runs add up the run value of the pitches swung at and taken in each zone.'],
     ['Swing/Take grade', 'Baseball Savant\'s Swing/Take method: every pitch is credited with its run value (what actually happened, from the count and base-out state before and after the pitch, plus runs scored), and those values are added up for swings and takes in each region (heart, shadow, chase, waste). Swing runs + take runs = run value. The grade puts run value per 100 pitches on the 20–80 scale: on player pages against every hitter in that season\'s data with 40+ pitches, and on game pages against every hitter-game with 8+ pitches. On pitch-by-pitch pages each pitch shows its region, swing or take, and its run value (green = good for the hitter, red = bad; on pitcher pages the sign is flipped).'],
