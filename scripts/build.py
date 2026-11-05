@@ -744,6 +744,32 @@ def ncaa_index():
     return out
 
 
+def gameplans():
+    """Scouting gameplans coaches publish from the site (data/gameplans/*.json, one file per save).
+    The newest save for each pitcher wins; written to site/data/gameplans.json."""
+    out, n = {}, 0
+    for f in sorted((DATA_DIR / "gameplans").glob("*.json")) if (DATA_DIR / "gameplans").is_dir() else []:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except ValueError:
+            log(f"  ! gameplan {f.name} isn't valid JSON; skipped")
+            continue
+        pid = str(d.get("id") or "").strip()
+        if not pid:
+            continue
+        n += 1
+        rec = {k: str(d.get(k) or "")[:6000] for k in ("name", "team", "rhh", "lhh", "by", "at")}
+        if pid not in out or rec["at"] >= out[pid]["at"]:
+            rec["saves"] = out.get(pid, {}).get("saves", 0) + 1
+            out[pid] = rec
+        else:
+            out[pid]["saves"] = out[pid].get("saves", 0) + 1
+    (OUT_DIR / "gameplans.json").write_text(json.dumps(out, separators=(",", ":")))
+    if n:
+        log(f"  gameplans: {len(out)} pitchers ({n} saves)")
+    return {"file": "gameplans.json", "pitchers": len(out)}
+
+
 def fix_batter_sides(df: pd.DataFrame):
     """BC hitters: bats.json first, then the roster's B/T. TrackMan operators sometimes tag the
     wrong side, which made one-sided hitters look like switch hitters."""
@@ -1058,6 +1084,10 @@ def build():
         "grades": grades_report,
         "video": {"report": vreport, "players": vextra["players"], "other": vextra["other"]},
         "weights": W,
+        # school-name spellings (TrackMan "Cal" = TruMedia "California"), for the scouting pages
+        "team_aliases": (json.loads((ROOT / "scripts" / "trumedia.json").read_text()).get("team_aliases", {})
+                         if (ROOT / "scripts" / "trumedia.json").exists() else {}),
+        "gameplans": gameplans(),
     }
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
     log(f"Done in {time.time()-t0:.1f}s. {len(players_out)} players, {len(seasons_meta)} seasons.")
