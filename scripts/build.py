@@ -1056,9 +1056,6 @@ def build():
         "ncaa": ncaa_index(),
         "runvalue": rv_report,
         "grades": grades_report,
-        # school-name spellings (TrackMan "Cal" = TruMedia "California"), for the scouting pages
-        "team_aliases": (json.loads((ROOT / "scripts" / "trumedia.json").read_text()).get("team_aliases", {})
-                         if (ROOT / "scripts" / "trumedia.json").exists() else {}),
         "video": {"report": vreport, "players": vextra["players"], "other": vextra["other"]},
         "weights": W,
     }
