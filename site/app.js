@@ -767,7 +767,7 @@ function movementChart(rows, active, opts = {}) {   // opts.season: season pitch
   const by = {}; pts.forEach(r => (by[r.pt] = by[r.pt] || []).push(r));
   const clampR = v => Math.max(-R, Math.min(R, v));
   for (const k in by) {
-    const a = by[k], hx = mean(a.map(r => r.hb)), vy = mean(a.map(r => r.ivb)), xm = opts.season || opts.plain ? {} : xMove(a);
+    const a = by[k], hx = mean(a.map(r => r.hb)), vy = mean(a.map(r => r.ivb)), xm = opts.season ? {} : xMove(a);
     const sa = opts.season ? opts.season.filter(r => r.pt === k && r.hb != null && r.ivb != null) : null;
     if (sa && sa.length >= 3) {   // season average: hollow ring, joined to tonight's average
       const sx = mean(sa.map(r => r.hb)), sy = mean(sa.map(r => r.ivb)), ex = X(clampR(sx)), ey = Y(clampR(sy));
@@ -1041,13 +1041,13 @@ function playerBatCharts(i, se) {
 // Home-screen app: everything except Glossary lives under the Hitting or Pitching tab.
 const isApp = () => document.documentElement.classList.contains('standalone');
 const SUBNAV = {
-  hitting: [['hitting', 'Leaderboard'], ['spray', 'Spray chart'], ['games', 'Games'], ['teams', 'Scouting'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
-  pitching: [['pitching', 'Leaderboard'], ['arsenal', 'Arsenals'], ['games', 'Games'], ['teams', 'Scouting'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
+  hitting: [['hitting', 'Leaderboard'], ['spray', 'Spray chart'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
+  pitching: [['pitching', 'Leaderboard'], ['arsenal', 'Arsenals'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
 };
 const SEC_OF = { hitting: 'hitting', spray: 'hitting', pitching: 'pitching', arsenal: 'pitching' };
 function sectionFor(h) {   // which tab a page belongs to (null = Home / Video / Profile / Glossary)
   if (SEC_OF[h]) return SEC_OF[h];
-  if (['games', 'search', 'ncaa', 'teams'].includes(h) || h.startsWith('game-') || h.startsWith('team-')) return S.section || 'hitting';
+  if (['games', 'search', 'ncaa'].includes(h) || h.startsWith('game-')) return S.section || 'hitting';
   if (h.startsWith('ncaa-p-')) return h.includes('-pitching-') ? 'pitching' : 'hitting';
   if (h.startsWith('pg-')) return /-pit-/.test(h) ? 'pitching' : 'hitting';
   return null;
@@ -1581,255 +1581,6 @@ async function pageSpray() {
   run();
 }
 
-/* ---------- Opponent scouting: TruMedia season profile + head-to-head TrackMan history ---------- */
-const fullName = n => normName(niceName(n));
-// one key per school, whatever the spelling ("Cal" / "California", "Miami (FL)" / "Miami")
-function schoolKey(name) {
-  if (!S.aliasMap) { S.aliasMap = new Map(); for (const [canon, al] of Object.entries(S.meta.team_aliases || {})) { S.aliasMap.set(normName(canon), normName(canon)); for (const a of al) S.aliasMap.set(normName(a), normName(canon)); } }
-  const n = normName(name); return S.aliasMap.get(n) || n;
-}
-async function loadAllSeasons() { for (const s of S.meta.seasons) await loadSeason(s.id); return S.meta.seasons.map(s => S.seasons[s.id]); }
-async function h2hGames(code) {   // every TrackMan game vs this opponent, oldest first
-  const out = [];
-  for (const se of await loadAllSeasons()) se.games.forEach((g, gi) => { if (g.opp === code && !g.nt) out.push({ se, g, gi, rows: se.rows.filter(r => r.g === gi) }); });
-  return out.sort((a, b) => a.g.d.localeCompare(b.g.d));
-}
-function ncaaTeamRows(d, school) { const n = schoolKey(school); return (d?.list || []).filter(o => schoolKey(o.team) === n); }
-// team totals from TruMedia player rows (counting stats summed, rates weighted)
-function ncaaTeamAgg(rows, side) {
-  if (!rows.length) return null;
-  const S0 = k => sum(rows.map(o => +o[k] || 0));
-  const W = side === 'hitting' ? 'PA' : 'TBF', w = rows.map(o => +o[W] || 0), tw = sum(w) || 1;
-  const wavg = k => { let s = 0, n = 0; rows.forEach((o, i) => { if (o[k] != null && isFinite(o[k])) { s += o[k] * w[i]; n += w[i]; } }); return n ? s / n : null; };
-  const o = { _n: rows.length };
-  for (const k of Object.keys(rows[0])) if (typeof rows[0][k] === 'number' || rows.some(r => typeof r[k] === 'number')) o[k] = wavg(k);
-  if (side === 'hitting') {
-    const AB = S0('AB'), H = S0('H'), PA = S0('PA'), BB = S0('BB'), HBP = S0('HBP'), b2 = S0('2B'), b3 = S0('3B'), HR = S0('HR');
-    if (AB) { o.AVG = H / AB; o.SLG = (H + b2 + 2 * b3 + 3 * HR) / AB; o.ISO = o.SLG - o.AVG; }
-    if (PA) { o.OBP = (H + BB + HBP) / PA; o['K%'] = S0('K') / PA; o['BB%'] = BB / PA; }
-    o.PA = PA; o.HR = HR; o.SB = S0('SB');
-  } else {
-    const ip = S0('IP'); o.IP = ip; o.TBF = tw;
-    const wip = k => { let s = 0, n = 0; rows.forEach(r => { if (r[k] != null && r.IP) { s += r[k] * r.IP; n += r.IP; } }); return n ? s / n : null; };
-    o.ERA = wip('ERA'); o.FIP = wip('FIP'); o.WHIP = wip('WHIP');
-  }
-  return o;
-}
-function rankBars(defs, me, pool, poolName) {
-  return `<div class="rk-list">${defs.map(([lab, k, dir, fmt]) => {
-    const v = me?.[k]; const vals = pool.map(o => o[k]).filter(x => x != null && isFinite(x));
-    if (v == null || !vals.length) return `<div class="rk-row na"><span class="lab">${lab}</span><div class="pct-track"></div><span class="val">—</span></div>`;
-    const better = vals.filter(x => (dir > 0 ? x > v : x < v)).length, rank = better + 1, p = vals.length > 1 ? Math.round(100 * (vals.length - rank) / (vals.length - 1)) : 50;
-    const col = pctColor(p), ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
-    return `<div class="rk-row" title="${esc(`${lab}: ${fmt(v)}, ${ord(rank)} of ${vals.length} ${poolName}`)}"><span class="lab">${lab}</span>
-      <div class="pct-track"><span class="pct-tick" style="left:50%"></span><span class="pct-fill" style="width:${p}%;background:${col}"></span><span class="pct-bub rk-bub" style="left:${p}%;background:${col}">${rank}</span></div>
-      <span class="val">${fmt(v)}</span></div>`; }).join('')}</div>
-    <p class="muted small" style="margin:6px 0 0">Bubble = rank among ${poolName} (1 = best for them). Red = a strength, blue = a weakness.</p>`;
-}
-const NC = (k, side) => (side === 'pitching' && !['IP', 'TBF', 'ERA', 'FIP', 'WHIP', 'K/9', 'BB/9', 'FBVel', 'MaxFBVel', 'FBSpin', 'Extension', 'G', 'GS'].includes(k) ? k + '|PIT' : k);
-const ncf = (k, side) => v => ncaaFmt(NC(k, side), v) + (NC(k, side).includes('%') && v != null ? '%' : '');
-const TEAM_HIT_DEFS = [['AVG', 'AVG', 1], ['OBP', 'OBP', 1], ['SLG', 'SLG', 1], ['wOBA', 'wOBA', 1], ['ISO', 'ISO', 1], ['K%', 'K%', -1], ['BB%', 'BB%', 1], ['Hard-hit %', 'HardHit%', 1], ['Barrel %', 'Barrel%', 1], ['Chase %', 'Chase%', -1], ['Whiff %', 'Whiff%', -1], ['GB %', 'GB%', -1], ['Pull %', 'Pull%', 1]];
-const TEAM_PIT_DEFS = [['ERA', 'ERA', -1], ['FIP', 'FIP', -1], ['K%', 'K%|PIT', 1], ['BB%', 'BB%|PIT', -1], ['FB velo', 'FBVel', 1], ['Whiff %', 'Whiff%|PIT', 1], ['Chase %', 'Chase%|PIT', 1], ['Strike %', 'Strike%|PIT', 1], ['xwOBA allowed', 'xwOBA|PIT', -1], ['GB %', 'GB%|PIT', 1]];
-
-// Plain-words team summary from conference ranks
-const TEAM_WORDS = {
-  hitting: { AVG: ['hit for average', 'don\'t hit for average'], OBP: ['get on base', 'struggle to get on base'], SLG: ['slug', 'lack slug'], wOBA: ['produce runs', 'struggle to produce'], ISO: ['hit for power', 'lack power'],
-    'K%': ['rarely strike out', 'strike out a lot'], 'BB%': ['draw walks', 'rarely walk'], 'HardHit%': ['hit the ball hard', 'make soft contact'], 'Barrel%': ['barrel the ball', 'rarely barrel it'],
-    'Chase%': ['rarely chase', 'chase a lot'], 'Whiff%': ['make contact', 'swing and miss'], 'GB%': ['lift the ball', 'hit a lot of ground balls'], 'Pull%': ['pull the ball', 'go the other way'] },
-  pitching: { ERA: ['prevent runs', 'give up runs'], FIP: ['pitch well (FIP)', 'pitch poorly (FIP)'], 'K%|PIT': ['strike hitters out', 'don\'t strike many out'], 'BB%|PIT': ['throw strikes', 'walk hitters'],
-    FBVel: ['throw hard', 'lack velocity'], 'Whiff%|PIT': ['miss bats', 'don\'t miss bats'], 'Chase%|PIT': ['get chases', 'don\'t get chases'], 'Strike%|PIT': ['pound the zone', 'fall behind'],
-    'xwOBA|PIT': ['limit hard contact', 'get hit hard'], 'GB%|PIT': ['keep it on the ground', 'give up fly balls'] },
-};
-function teamRanks(defs, me, pool) {
-  return defs.map(([lab, k, dir, fmt]) => { const v = me?.[k], vals = pool.map(o => o[k]).filter(x => x != null && isFinite(x));
-    if (v == null || !vals.length) return null; return { lab, k, v, fmt, n: vals.length, rank: vals.filter(x => (dir > 0 ? x > v : x < v)).length + 1 }; }).filter(Boolean);
-}
-function teamSummary(side, me, pool, poolName) {
-  const defs = side === 'hitting' ? TEAM_HIT_DEFS.map(([l, k, d]) => [l, k, d, ncf(k, 'hitting')]) : TEAM_PIT_DEFS.map(([l, k, d]) => [l, k, d, ncf(k.replace('|PIT', ''), 'pitching')]);
-  const r = teamRanks(defs, me, pool); if (!r.length) return '';
-  const n = r[0].n, top = Math.max(1, Math.round(n * 0.2)), W = TEAM_WORDS[side];
-  const ord = x => x + (['th', 'st', 'nd', 'rd'][(x % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][x % 100] || 'th');
-  const line = (o, good) => `<li><b>${esc((W[o.k] || [o.lab, o.lab])[good ? 0 : 1])}</b> <span class="muted small">${esc(o.lab)} ${o.fmt(o.v)}, ${ord(o.rank)} of ${n}</span></li>`;
-  const st = r.filter(o => o.rank <= top).sort((a, b) => a.rank - b.rank), wk = r.filter(o => o.rank > n - top).sort((a, b) => b.rank - a.rank);
-  return `<div class="ts-cols"><div><h3 class="dlt down">They ${side === 'hitting' ? 'can' : 'tend to'}…</h3><ul class="ts">${st.map(o => line(o, true)).join('') || '<li class="muted">No standout strengths</li>'}</ul></div>
-    <div><h3 class="dlt up">Where to attack</h3><ul class="ts">${wk.map(o => line(o, false)).join('') || '<li class="muted">No clear weaknesses</li>'}</ul></div></div>`;
-}
-function teamLeaders(H, P) {
-  const f = (k, side) => ncf(k, side);
-  const bats = H.filter(o => (o.PA || 0) >= 50).sort((a, b) => (b.xwOBA ?? b.wOBA ?? 0) - (a.xwOBA ?? a.wOBA ?? 0)).slice(0, 5);
-  const arms = P.filter(o => (o.IP || 0) >= 10).sort((a, b) => ((b['K%|PIT'] || 0) - (b['BB%|PIT'] || 0)) - ((a['K%|PIT'] || 0) - (a['BB%|PIT'] || 0))).slice(0, 5);
-  const li = (o, txt) => `<li><b>${esc(o.name)}</b> <span class="muted small">${o.hand ? esc(o.hand) + ' · ' : ''}${txt}</span></li>`;
-  return `<section class="grid2"><div class="panel"><div class="panel-h"><h2>Most dangerous bats</h2><span class="note">By xwOBA · 50+ PA</span></div><ol class="ts">${bats.map(o => li(o, `${f('AVG', 'hitting')(o.AVG)}/${f('OBP', 'hitting')(o.OBP)}/${f('SLG', 'hitting')(o.SLG)} · xwOBA ${f('xwOBA', 'hitting')(o.xwOBA)} · ${F.int(o.HR || 0)} HR`)).join('') || '<li class="muted">—</li>'}</ol></div>
-    <div class="panel"><div class="panel-h"><h2>Top arms</h2><span class="note">By K−BB% · 10+ IP</span></div><ol class="ts">${arms.map(o => li(o, `${F.ip(Math.round((o.IP || 0) * 3))} IP · ${f('K%', 'pitching')(o['K%|PIT'])} K · ${f('BB%', 'pitching')(o['BB%|PIT'])} BB · ${f('FBVel', 'pitching')(o.FBVel)} FB`)).join('') || '<li class="muted">—</li>'}</ol></div></section>`;
-}
-
-// Scouting flags for one TruMedia player, from his percentile among the conference
-function scoutFlags(o, pool, side) {
-  const pr = (k, dir = 1) => { const vals = pool.map(x => x[k]).filter(v => v != null && isFinite(v)); const v = o[k]; if (v == null || vals.length < 5) return null; return Math.round(100 * vals.filter(x => (dir > 0 ? x < v : x > v)).length / vals.length); };
-  const f = [];
-  const add = (cond, txt, kind) => { if (cond) f.push([txt, kind]); };
-  if (side === 'hitting') {
-    const ch = pr('Chase%'), wh = pr('Whiff%'), k = pr('K%'), bb = pr('BB%'), brl = pr('Barrel%'), hh = pr('HardHit%'), pull = pr('Pull%'), gb = pr('GB%'), fb = pr('FB%'), con = pr('Contact%');
-    add(ch >= 75, `Chases (${ncf('Chase%', side)(o['Chase%'])})`, 'attack'); add(wh >= 75, `Swing-and-miss (${ncf('Whiff%', side)(o['Whiff%'])} whiff)`, 'attack');
-    add(k <= 25 && con >= 60, 'Tough to strike out', 'warn'); add(bb >= 75, `Patient (${ncf('BB%', side)(o['BB%'])} BB)`, 'warn');
-    add(brl >= 75 || hh >= 80, 'Damage threat', 'warn'); add(pull >= 75 && fb >= 50, 'Pull-side air power', 'warn'); add(gb >= 75, 'Ground-ball hitter', 'info');
-    add(ch <= 20, 'Rarely chases', 'warn');
-  } else {
-    const v = pr('FBVel'), bb = pr('BB%|PIT', -1), wh = pr('Whiff%|PIT'), gb = pr('GB%|PIT'), k = pr('K%|PIT'), ch = pr('Chase%|PIT');
-    add(v >= 75, `Power arm (${ncf('FBVel', side)(o.FBVel)} FB)`, 'warn'); add(wh >= 75 || k >= 80, 'Misses bats', 'warn'); add(bb >= 75, 'Strike thrower', 'warn');
-    add(bb <= 20, `Walks hitters (${ncf('BB%', side)(o['BB%|PIT'])} BB)`, 'attack'); add(gb >= 75, 'Ground-ball pitcher', 'info'); add(ch >= 75, 'Gets chases', 'warn');
-  }
-  return f;
-}
-const flagChips = f => f.map(([t, k]) => `<span class="sflag ${k}">${esc(t)}</span>`).join('');
-
-async function pageTeams() {
-  setNav('teams');
-  const seas = await loadAllSeasons(), by = new Map();
-  for (const se of seas) se.games.forEach(g => { if (!g.opp || isBC(g.opp)) return; const o = by.get(g.opp) || { code: g.opp, n: 0, t: 0, last: '' }; o.n++; if (!g.nt) o.t++; if (g.d > o.last) o.last = g.d; by.set(g.opp, o); });
-  const played = [...by.values()].sort((a, b) => b.last.localeCompare(a.last));
-  const years = (S.meta.ncaa?.years || []).map(y => y.year).sort((a, b) => b - a);
-  const nc = years.length ? await loadNcaa(years[0]) : null;
-  const ui = S.ui.teams || (S.ui.teams = { scope: 'p4', q: '' });
-  const playedNames = new Set(played.map(o => schoolKey(teamName(o.code))));
-  const confOf = new Map(); for (const o of nc?.hitting?.list || []) if (o.team && !confOf.has(o.team)) confOf.set(o.team, { conf: o.conf || '', p4: !!o.p4, n: 0 });
-  for (const o of nc?.hitting?.list || []) if (confOf.has(o.team)) confOf.get(o.team).n++;
-  const others = [...confOf].filter(([t]) => !playedNames.has(schoolKey(t)) && schoolKey(t) !== schoolKey('Boston College'))
-    .map(([t, v]) => ({ t, ...v })).filter(o => (ui.scope === 'p4' ? o.p4 : ui.scope === 'all' ? true : o.conf === ui.scope) && (!ui.q || normName(o.t).includes(normName(ui.q))))
-    .sort((a, b) => (a.conf || '').localeCompare(b.conf || '') || a.t.localeCompare(b.t));
-  const confs = [...new Set([...confOf.values()].filter(v => v.p4).map(v => v.conf).filter(Boolean))].sort();
-  const pconf = o => { const c = confOf.get([...confOf.keys()].find(t => schoolKey(t) === schoolKey(teamName(o.code)))); return c?.conf || ''; };
-  if (!S.sort['t-teams2']) S.sort['t-teams2'] = { k: 'conf', asc: true };   // ACC first
-  app.innerHTML = `<div class="phead"><div><span class="eyebrow">Opponent scouting</span><h1>Scouting</h1></div></div>
-    <p class="muted" style="margin-top:0">Every team has its season profile from TruMedia. Teams we've played also have everything from our TrackMan games against them.</p>
-    <section><div class="panel-h"><h2>Teams we've played</h2></div>
-    ${table('t-teams', [{ k: 'name', label: 'Team', l: true, get: o => teamName(o.code), html: o => `<a href="#team-${esc(o.code)}">${esc(teamName(o.code))}</a>` }, { k: 'conf', label: 'Conf', l: true, get: pconf },
-      { k: 'n', label: 'Games vs BC', fmt: F.int }, { k: 't', label: 'With TrackMan', fmt: F.int }, { k: 'last', label: 'Last played', l: true, html: o => esc(fmtDate(o.last)) }], played, { sort: 'last' })}</section>
-    ${nc ? `<section><div class="panel-h"><h2>Everyone else</h2><span class="note">From the TruMedia ${years[0]} pull</span></div>
-      <div class="controls" style="margin:0 0 8px"><select id="tms-scope" aria-label="Teams">${[['p4', 'Power 4'], ...confs.map(c => [c, c]), ['all', 'All D1']].map(([v, l]) => `<option value="${esc(v)}" ${ui.scope === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
-        <input type="search" id="tms-q" placeholder="Find a team" value="${esc(ui.q)}" style="width:170px"></div>
-      ${table('t-teams2', [{ k: 't', label: 'Team', l: true, html: o => `<a href="#team-${encodeURIComponent(o.t)}">${esc(o.t)}</a>` }, { k: 'conf', label: 'Conf', l: true }, { k: 'n', label: 'Hitters in pull', fmt: F.int }], others, { sort: 'conf', limit: 400 })}</section>` : ''}`;
-  const sc = $('#tms-scope'); if (sc) sc.onchange = () => { ui.scope = sc.value; route(); };
-  const q = $('#tms-q'); if (q) q.onchange = () => { ui.q = q.value.trim(); route(); };
-}
-
-async function pageTeam(code) {
-  setNav('teams');
-  const school = teamName(code), ui = S.ui['team:' + code] || (S.ui['team:' + code] = { tab: 'overview' });
-  const games = await h2hGames(code);
-  const years = (S.meta.ncaa?.years || []).map(y => y.year).sort((a, b) => b - a);
-  const year = ui.year && years.includes(ui.year) ? ui.year : years[0];
-  const nc = year ? await loadNcaa(year) : null;
-  const H = nc ? ncaaTeamRows(nc.hitting, school) : [], P = nc ? ncaaTeamRows(nc.pitching, school) : [];
-  const conf = (H[0] || P[0])?.conf || '';
-  const confPool = side => { const d = nc?.[side]; if (!d) return []; const teams = new Map(); for (const o of d.list) if (conf ? o.conf === conf : o.p4) { if (!teams.has(o.team)) teams.set(o.team, []); teams.get(o.team).push(o); } return [...teams.values()].map(r => ncaaTeamAgg(r, side)).filter(Boolean); };
-  const playerPool = side => (nc?.[side]?.list || []).filter(o => (conf ? o.conf === conf : o.p4) && (side === 'hitting' ? (o.PA || 0) >= 40 : (o.IP || 0) >= 10));
-  const poolName = conf ? `${conf} teams` : 'Power 4 teams';
-  const allRows = games.flatMap(x => x.rows);
-  const theirBat = allRows.filter(r => S.players[r.h]?.t === code), theirPit = allRows.filter(r => S.players[r.p]?.t === code);
-  const sample = nc?.sample ? '<div class="sample-tag">Sample TruMedia numbers (preview only)</div>' : '';
-  const tabs = segmented('tm-tab', [['overview', 'Overview'], ['hit', 'Their hitters'], ['pit', 'Their pitchers']], ui.tab, v => { ui.tab = v; route(); });
-  const head = `<div class="phead"><div><span class="eyebrow">Opponent scouting${conf ? ' · ' + esc(conf) : ''}</span><h1>${esc(school)}</h1>
-      <div class="muted small">${games.length ? `${games.length} TrackMan game${games.length === 1 ? '' : 's'} vs BC · ${F.int(allRows.length)} pitches` : 'No TrackMan games vs BC yet'}${year ? ` · TruMedia ${year}` : ''}</div></div>
-    <div class="controls">${tabs}${years.length > 1 ? `<select id="tm-year" aria-label="TruMedia season">${years.map(y => `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select>` : ''}</div></div>`;
-  let body = '';
-  if (ui.tab === 'overview') body = teamOverview({ code, school, games, nc, H, P, confPool, poolName, theirBat, theirPit, sample });
-  else if (ui.tab === 'hit') body = teamHitters({ code, nc, H, theirBat, playerPool, sample, games });
-  else body = teamPitchers({ code, nc, P, theirPit, playerPool, sample });
-  app.innerHTML = head + body;
-  const ys = $('#tm-year'); if (ys) ys.onchange = () => { ui.year = +ys.value; route(); };
-  $$('.sc-card details').forEach(d => d.addEventListener('toggle', () => { const k = d.dataset.k; if (d.open) ui.open = k; }));
-}
-
-function teamOverview({ code, school, games, nc, H, P, confPool, poolName, theirBat, theirPit, sample }) {
-  const ht = ncaaTeamAgg(H, 'hitting'), pt = ncaaTeamAgg(P, 'pitching');
-  const prof = nc ? `<section class="grid2">
-      <div class="panel">${sample}<div class="panel-h"><h2>Their offense</h2><span class="note">TruMedia · ${F.int(ht?.PA || 0)} PA</span></div>${ht ? teamSummary('hitting', ht, confPool('hitting'), poolName) : ''}${ht ? rankBars(TEAM_HIT_DEFS.map(([l, k, d]) => [l, k, d, ncf(k, 'hitting')]), ht, confPool('hitting'), poolName) : '<p class="empty">Not in the TruMedia pull.</p>'}</div>
-      <div class="panel">${sample}<div class="panel-h"><h2>Their pitching</h2><span class="note">TruMedia · ${pt ? F.ip(Math.round((pt.IP || 0) * 3)) : 0} IP</span></div>${pt ? teamSummary('pitching', pt, confPool('pitching'), poolName) : ''}${pt ? rankBars(TEAM_PIT_DEFS.map(([l, k, d]) => [l, k, d, ncf(k.replace('|PIT', ''), 'pitching')]), pt, confPool('pitching'), poolName) : '<p class="empty">Not in the TruMedia pull.</p>'}</div>
-    </section>${teamLeaders(H, P)}` : '<p class="muted">The TruMedia season profile shows here once the NCAA data is on the site.</p>';
-  if (!games.length) return prof + `<section class="panel nohist"><div class="panel-h"><h2>Head-to-head</h2></div><p style="margin:0">BC hasn't played ${esc(school)} in a TrackMan game yet. After we do, this page adds every pitch from those games: where they hurt us, what worked for our pitchers, and each player's history against BC.</p></section>`;
-  const b = stats(theirBat), p = stats(theirPit);
-  const gl = games.map(x => { return { d: x.g.d, sid: x.se.id, gi: x.gi, n: x.rows.length, label: x.se.label, rows: x.rows }; });
-  const tiles = (st, who) => [[`${F.avg(st.avg)}/${F.avg(st.obp)}/${F.avg(st.slg)}`, 'AVG/OBP/SLG'], [F.avg(st.xwoba), 'xwOBA'], [F.pct(st.kPct) + '%', 'K%'], [F.pct(st.bbPct) + '%', 'BB%'], [F.pct(st.chase) + '%', 'Chase%'], [F.pct(st.whiff) + '%', 'Whiff%'], [F.pct(st.hhPct) + '%', 'Hard-hit%']]
-    .map(([v, l]) => `<div class="tile"><div class="tile-v">${v}</div><div class="tile-l">${l}</div></div>`).join('');
-  // what worked for BC pitchers vs them
-  const types = PT_ORDER.filter(k => theirBat.filter(r => r.pt === k).length >= 10);
-  const worked = types.map(k => { const a = theirBat.filter(r => r.pt === k), st = stats(a); return { pt: k, n: a.length, whiff: st.whiff, chase: st.chase, csw: st.csw, xwoba: st.xwoba, hh: st.hhPct, ...pitcherRV(a), stuffP: gradePlus(a, 'sp') }; });
-  return prof + `
-    <section><div class="panel-h"><h2>Games vs BC</h2><span class="note">TrackMan games</span></div>
-      ${table('t-tm-g', [{ k: 'd', label: 'Date', l: true, html: o => `<a href="#game-${o.sid}-${o.gi}">${esc(fmtDate(o.d))}</a>` }, { k: 'label', label: 'Season', l: true }, { k: 'n', label: 'Pitches', fmt: F.int },
-        { k: 'bat', label: 'Their AVG/OBP/SLG', l: true, html: o => { const st = stats(o.rows.filter(r => S.players[r.h]?.t === code)); return `${F.avg(st.avg)}/${F.avg(st.obp)}/${F.avg(st.slg)}`; } },
-        { k: 'k', label: 'BC pitchers K / BB', l: true, html: o => { const st = stats(o.rows.filter(r => S.players[r.h]?.t === code)); return `${st.K} / ${st.BB}`; } },
-        { k: 'rec', label: '', l: true, html: o => `<a class="loglink" href="#game-${o.sid}-${o.gi}">Game recap ›</a>` }], gl, { nosort: true })}</section>
-    <section class="panel"><div class="panel-h"><h2>Their hitters vs BC</h2><span class="note">${F.int(b.PA)} PA · ${F.int(theirBat.length)} pitches</span></div><div class="strip">${tiles(b)}</div></section>
-    <section class="grid2">
-      <div class="panel"><div class="panel-h"><h2>Where they hurt us</h2><span class="note">Their xwOBA by zone · catcher's view</span></div><div class="chart-box" style="max-width:300px">${zoneChart(theirBat, 'xwoba', 'hit')}</div></div>
-      <div class="panel"><div class="panel-h"><h2>Where we beat them</h2><span class="note">Their whiff % by zone</span></div><div class="chart-box" style="max-width:300px">${zoneChart(theirBat, 'whiff', 'hit')}</div></div>
-    </section>
-    <section><div class="panel-h"><h2>What worked for our pitchers</h2><span class="note">BC pitches to their hitters, by pitch type</span></div>
-      ${table('t-tm-w', [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true }, { k: 'n', label: '#', fmt: F.int }, GRADE_COLS[0], C.whiff, C.chase, C.csw, { k: 'xwoba', label: 'xwOBA', fmt: F.avg }, { k: 'hh', label: 'Hard Hit%', fmt: F.pct }, ...RV_COLS], worked, { sort: 'rv100P' })}</section>
-    <section class="panel"><div class="panel-h"><h2>Their pitchers vs BC</h2><span class="note">${F.int(p.PA)} BF · ${F.int(theirPit.length)} pitches</span></div><div class="strip">${tiles(p)}</div>
-      <p class="muted small" style="margin:6px 0 0">BC's results against their staff. Pitcher-by-pitcher detail is on the "Their pitchers" tab.</p></section>`;
-}
-
-function h2hByPlayer(rows, key) { const m = new Map(); for (const r of rows) { const i = r[key]; if (!m.has(i)) m.set(i, []); m.get(i).push(r); } return m; }
-function teamHitters({ code, nc, H, theirBat, playerPool, sample }) {
-  const vsBC = h2hByPlayer(theirBat, 'h'), pool = playerPool('hitting');
-  const byName = new Map([...vsBC.keys()].map(i => [fullName(S.players[i].n), i]));
-  const tm = H.filter(o => (o.PA || 0) >= 1).sort((a, b) => (b.PA || 0) - (a.PA || 0));
-  const seen = new Set(), cards = [];
-  for (const o of tm) { const i = byName.get(normName(o.name)); if (i != null) seen.add(i); cards.push({ o, i }); }
-  for (const i of vsBC.keys()) if (!seen.has(i)) cards.push({ o: null, i });   // faced BC but not in the pull
-  if (!cards.length) return '<p class="empty">No hitters yet.</p>';
-  const f = k => ncf(k, 'hitting');
-  return `${sample}<div class="sc-list">${cards.map(({ o, i }) => {
-    const rows = i != null ? vsBC.get(i) : [], st = rows.length ? stats(rows) : null, name = o ? o.name : niceName(S.players[i].n);
-    const sides = [...new Set(rows.map(r => r.bs).filter(Boolean))], hand = sides.length === 2 ? 'S' : sides[0] || o?.hand || '';
-    const groups = ['Fastballs', 'Breaking', 'Offspeed'].map(g => { const a = rows.filter(r => GROUP[r.pt] === g), s2 = stats(a); return { g, n: a.length, whiff: s2.whiff, chase: s2.chase, xwoba: s2.xwoba }; }).filter(x => x.n);
-    return `<div class="sc-card${rows.length ? '' : ' noh2h'}"><details data-k="${esc(name)}" ${rows.length ? '' : 'class="static"'}><summary ${rows.length ? '' : 'tabindex="-1" onclick="return false"'}>
-        <div class="sc-top"><b class="sc-name">${esc(name)}</b><span class="muted small">${hand ? `Bats ${esc(hand)}` : ''}${o?.pos ? ' · ' + esc(o.pos) : ''}</span>
-          <span class="sc-flags">${o ? flagChips(scoutFlags(o, pool, 'hitting')) : ''}</span></div>
-        <div class="sc-stats">${o ? [['PA', F.int(o.PA)], ['Slash', `${f('AVG')(o.AVG)}/${f('OBP')(o.OBP)}/${f('SLG')(o.SLG)}`], ['xwOBA', f('xwOBA')(o.xwOBA)], ['K%', f('K%')(o['K%'])], ['BB%', f('BB%')(o['BB%'])],
-          ['Chase', f('Chase%')(o['Chase%'])], ['Whiff', f('Whiff%')(o['Whiff%'])], ['Hard-hit', f('HardHit%')(o['HardHit%'])], ['GB%', f('GB%')(o['GB%'])], ['Pull%', f('Pull%')(o['Pull%'])]].map(([l, v]) => `<span><i>${l}</i>${v}</span>`).join('') : '<span class="muted small">Not in the TruMedia pull</span>'}
-          ${st ? `<span class="sc-h2h"><i>vs BC</i>${st.PA} PA · ${st.H}-${st.AB}${st.HR ? `, ${st.HR} HR` : ''} · ${st.K} K · ${st.BB} BB</span>` : ''}</div>
-      </summary>
-      ${rows.length ? `<div class="sc-body"><div class="sc-charts">
-          <div><div class="mini-h"><b>Spray vs BC</b></div><div class="chart-box" style="max-width:260px">${sprayChart(rows)}</div></div>
-          <div><div class="mini-h"><b>Damage zones vs BC</b><span class="muted small">xwOBA</span></div><div class="chart-box" style="max-width:240px">${zoneChart(rows, 'xwoba', 'hit')}</div></div>
-          <div><div class="mini-h"><b>Swings &amp; misses</b><span class="muted small">whiff %</span></div><div class="chart-box" style="max-width:240px">${zoneChart(rows, 'whiff', 'hit')}</div></div></div>
-        ${table('t-sc-' + i, [{ k: 'g', label: 'vs BC by pitch type', l: true }, { k: 'n', label: 'Pitches', fmt: F.int }, C.whiff, C.chase, C.xwoba], groups, { nosort: true })}
-        <p class="small" style="margin:6px 0 0"><a href="#player-${esc(S.players[i].k)}">Full page for ${esc(name)} ›</a></p></div>` : ''}
-    </details></div>`; }).join('')}</div>`;
-}
-function teamPitchers({ code, nc, P, theirPit, playerPool, sample }) {
-  const vsBC = h2hByPlayer(theirPit, 'p'), pool = playerPool('pitching');
-  const byName = new Map([...vsBC.keys()].map(i => [fullName(S.players[i].n), i]));
-  const tm = P.filter(o => (o.IP || 0) > 0).sort((a, b) => (b.IP || 0) - (a.IP || 0));
-  const seen = new Set(), cards = [];
-  for (const o of tm) { const i = byName.get(normName(o.name)); if (i != null) seen.add(i); cards.push({ o, i }); }
-  for (const i of vsBC.keys()) if (!seen.has(i)) cards.push({ o: null, i });
-  if (!cards.length) return '<p class="empty">No pitchers yet.</p>';
-  const f = k => ncf(k, 'pitching');
-  return `${sample}<div class="sc-list">${cards.map(({ o, i }) => {
-    const rows = i != null ? vsBC.get(i) : [], name = o ? o.name : niceName(S.players[i].n), th = rows[0]?.th || o?.hand || '';
-    const ars = rows.length ? arsenal(rows) : [], types = new Set(ars.map(a => a.pt)), st = rows.length ? stats(rows) : null;
-    return `<div class="sc-card${rows.length ? '' : ' noh2h'}"><details data-k="${esc(name)}" ${rows.length ? '' : 'class="static"'}><summary ${rows.length ? '' : 'tabindex="-1" onclick="return false"'}>
-        <div class="sc-top"><b class="sc-name">${esc(name)}</b><span class="muted small">${th ? `${esc(th)}HP` : ''}${o ? ` · ${o.GS ? `${F.int(o.GS)} GS` : 'Reliever'}` : ''}</span>
-          <span class="sc-flags">${o ? flagChips(scoutFlags(o, pool, 'pitching')) : ''}</span></div>
-        <div class="sc-stats">${o ? [['IP', F.ip(Math.round((o.IP || 0) * 3))], ['ERA', f('ERA')(o.ERA)], ['FIP', f('FIP')(o.FIP)], ['K%', f('K%')(o['K%|PIT'])], ['BB%', f('BB%')(o['BB%|PIT'])], ['FB velo', f('FBVel')(o.FBVel)],
-          ['Max', f('MaxFBVel')(o.MaxFBVel)], ['Whiff', f('Whiff%')(o['Whiff%|PIT'])], ['Chase', f('Chase%')(o['Chase%|PIT'])], ['GB%', f('GB%')(o['GB%|PIT'])]].map(([l, v]) => `<span><i>${l}</i>${v}</span>`).join('') : '<span class="muted small">Not in the TruMedia pull</span>'}
-          ${st ? `<span class="sc-h2h"><i>vs BC</i>${F.int(rows.length)} pitches · ${st.PA} BF · ${st.K} K · ${st.BB} BB${rows.length >= 30 ? ` · Stuff+ ${Math.round(gradePlus(rows, 'sp') || 0)}` : ''}</span>` : ''}</div>
-      </summary>
-      ${rows.length ? `<div class="sc-body"><div class="sc-charts">
-          <div><div class="mini-h"><b>Movement vs BC</b><span class="muted small">pitcher's view</span></div><div class="chart-box" style="max-width:300px">${movementChart(rows, types)}</div>
-            <div class="legend">${[...types].map(k => `<span><i style="background:${PT[k].c}"></i>${PT[k].n}</span>`).join('')}</div></div>
-          <div><div class="mini-h"><b>Where he threw it</b><span class="muted small">pitcher's view</span></div><div class="chart-box" style="max-width:260px">${heatMap(rows)}</div></div></div>
-        ${table('t-scp-' + i, [{ k: 'pt', label: 'Pitch', l: true, html: r => `${ptDot(r.pt)}${PT[r.pt].n}`, get: r => PT_ORDER.indexOf(r.pt), asc: true }, { k: 'n', label: '#', fmt: F.int }, { k: 'use', label: 'Usage%', fmt: F.pct }, GRADE_COLS[0],
-          { k: 'v', label: 'Velo', fmt: F.f1 }, { k: 'vmax', label: 'Max', fmt: F.f1 }, { k: 'ivb', label: 'IVB', fmt: F.f1 }, { k: 'hb', label: 'HB', fmt: F.f1 }, { k: 'spin', label: 'Spin', fmt: F.int }, C.whiff, { k: 'zone', label: 'Zone%', fmt: F.pct }, { k: 'xwoba', label: 'xwOBA', fmt: F.avg }], ars, { sort: 'n' })}
-        <p class="small" style="margin:6px 0 0"><a href="#player-${esc(S.players[i].k)}">Full page for ${esc(name)} ›</a></p></div>` : ''}
-    </details></div>`; }).join('')}</div>`;
-}
-
 async function pageGames() {
   setNav('games');
   const se = await loadSeason(S.season);
@@ -1881,7 +1632,7 @@ async function pageGame(sid, gi) {
   if (g.nt) {
     app.innerHTML = `
   <div class="phead"><div><span class="eyebrow">${esc(fmtDate(g.d, true))} · ${g.bb ? 'Results + batted balls' : 'Results only'}</span>
-    <h1>BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}</h1></div><div class="controls">${gameV}${g.opp && !isBC(g.opp) ? `<a class="btn" href="#team-${esc(g.opp)}">Scout ${esc(teamName(g.opp))} ›</a>` : ''}<a class="btn" href="#games">All games</a></div></div>
+    <h1>BC ${g.home ? 'vs' : '@'} ${esc(teamName(g.opp))}</h1></div><div class="controls">${gameV}<a class="btn" href="#games">All games</a></div></div>
   <p class="muted small" style="margin:0">${g.bb ? 'Plate-appearance results plus TrackMan batted-ball data. Exit velocity, launch angle, xwOBA and the spray chart use these balls in play; pitch-level stats like swing and chase rates are not available for this game.' : 'No TrackMan file for this game. Plate-appearance results count toward AVG, OBP, SLG, wOBA, K% and BB%, and are left out of tracked stats like exit velocity and xwOBA.'}</p>
   <section><div class="panel-h"><h2>BC hitters</h2></div>${table('t-gbat', [nameCol, C.PA, C.AB, C.H, C['2B'], C['3B'], C.HR, C.BB, C.K, C.HBP, C.avg, C.obp, C.slg, ...(g.bb ? [C.bbe, C.avgEV, C.maxEV, C.xwoba] : [])], bcBat, { sort: 'PA', total: { ...stats(rows), _label: 'BC total' } })}</section>
   ${g.bb ? `<section class="grid-pp"><div class="panel"><div class="panel-h"><h2>Spray chart</h2></div><div class="chart-box">${sprayChart(rows, { showBatter: true })}</div></div>
@@ -3193,8 +2944,6 @@ async function route() {
     else if (h === 'arsenal') await pageArsenal();
     else if (h === 'spray') await pageSpray();
     else if (h === 'games') await pageGames();
-    else if (h === 'teams') await pageTeams();
-    else if (h.startsWith('team-')) await pageTeam(decodeURIComponent(h.slice(5)));
     else if (h.startsWith('game-')) { const m = h.match(/^game-(.+)-(\d+)$/); if (m) await pageGame(m[1], +m[2]); }
     else if (h.startsWith('player-')) await pagePlayer(h.slice(7));
     else if (h.startsWith('pg-')) { const m = h.match(/^pg-(\d{4}-(?:spring|fall))-(\d+)-(hit|pit)-(.+)$/); if (m) await pagePlayerGame(m[1], +m[2], m[3], m[4]); }
