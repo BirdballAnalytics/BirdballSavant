@@ -1041,14 +1041,15 @@ function playerBatCharts(i, se) {
 // Home-screen app: everything except Glossary lives under the Hitting or Pitching tab.
 const isApp = () => document.documentElement.classList.contains('standalone');
 const SUBNAV = {
-  hitting: [['hitting', 'Leaderboard'], ['spray', 'Spray chart'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
+  hitting: [['hitting', 'Leaderboard'], ['scout', 'Scouting'], ['spray', 'Spray chart'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
   pitching: [['pitching', 'Leaderboard'], ['arsenal', 'Arsenals'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
 };
-const SEC_OF = { hitting: 'hitting', spray: 'hitting', pitching: 'pitching', arsenal: 'pitching' };
+const SEC_OF = { hitting: 'hitting', spray: 'hitting', scout: 'hitting', pitching: 'pitching', arsenal: 'pitching' };
 function sectionFor(h) {   // which tab a page belongs to (null = Home / Video / Profile / Glossary)
   if (SEC_OF[h]) return SEC_OF[h];
   if (['games', 'search', 'ncaa'].includes(h) || h.startsWith('game-')) return S.section || 'hitting';
   if (h.startsWith('ncaa-p-')) return h.includes('-pitching-') ? 'pitching' : 'hitting';
+  if (h.startsWith('scout-')) return 'hitting';
   if (h.startsWith('pg-')) return /-pit-/.test(h) ? 'pitching' : 'hitting';
   return null;
 }
@@ -1059,7 +1060,7 @@ function enterSection(sec, page) {   // a sub-tab was tapped: point shared pages
 }
 function drawSubnav(h) {
   const el = $('#subnav'); if (!el) return;
-  const page = h || 'home', sec = isApp() && SUBNAV[S.section] && (SUBNAV.hitting.concat(SUBNAV.pitching).some(([k]) => k === page)) ? sectionFor(page) : null;
+  const page = h && h.startsWith('scout-') ? 'scout' : (h || 'home'), sec = isApp() && SUBNAV[S.section] && (SUBNAV.hitting.concat(SUBNAV.pitching).some(([k]) => k === page)) ? sectionFor(page) : null;
   if (!sec) { el.hidden = true; el.innerHTML = ''; return; }
   const items = SUBNAV[sec].filter(([k]) => k !== 'ncaa' || (S.meta.ncaa?.years || []).length);
   el.innerHTML = items.map(([k, l]) => `<a href="#${k}" data-sec="${sec}" data-page="${k}" class="${k === page ? 'on' : ''}">${l}</a>`).join('');
@@ -1579,6 +1580,183 @@ async function pageSpray() {
   };
   form.onchange = run; form.onsubmit = e => { e.preventDefault(); run(); };
   run();
+}
+
+/* ---------- Scouting: opposing pitchers for our hitters (TruMedia season line + TrackMan pitch data) ---------- */
+// A pitcher is identified by school + name, so TrackMan ("Cal", "Smith, John") and TruMedia
+// ("California", "John Smith") land on the same page, and a gameplan follows him across seasons.
+const fullName = n => normName(niceName(n));
+function schoolKey(name) {
+  if (!S.aliasMap) { S.aliasMap = new Map(); for (const [canon, al] of Object.entries(S.meta.team_aliases || {})) { S.aliasMap.set(normName(canon), normName(canon)); for (const a of al) S.aliasMap.set(normName(a), normName(canon)); } }
+  const n = normName(name); return S.aliasMap.get(n) || n;
+}
+const GH_REPO = (() => { const h = location.hostname.match(/^([^.]+)\.github\.io$/i), seg = location.pathname.split('/').filter(Boolean)[0]; return h && seg ? `${h[1]}/${seg}` : 'birdballanalytics/BirdballSavant'; })();
+const scoutHref = id => '#scout-p-' + encodeURIComponent(id);
+async function loadGameplans() {
+  if (S.plans) return S.plans;
+  try { S.plans = await getJSON('data/' + (S.meta.gameplans?.file || 'gameplans.json')); } catch { S.plans = {}; }
+  return S.plans;
+}
+async function scoutIndex() {
+  if (S.scout) return S.scout;
+  const years = (S.meta.ncaa?.years || []).map(y => y.year).sort((a, b) => b - a);
+  const year = years[0] ?? null, nc = year != null ? await loadNcaa(year) : null;
+  const bcKey = schoolKey('Boston College'), teams = new Map();
+  const team = (name, conf) => {
+    const k = schoolKey(name); if (!k || k === bcKey) return null;
+    if (!teams.has(k)) teams.set(k, { k, name, conf: conf || '', p: new Map() });
+    const t = teams.get(k); if (conf && !t.conf) t.conf = conf; return t;
+  };
+  const pit = (t, name) => { const id = t.k + '~' + fullName(name); if (!t.p.has(id)) t.p.set(id, { id, name: niceName(name), team: t, tm: null, idx: [], hand: '' }); return t.p.get(id); };
+  for (const o of nc?.pitching?.list || []) {
+    if (!o.team || !o.name) continue;
+    const t = team(o.team, o.conf); if (!t) continue; t.name = o.team;   // TruMedia's spelling of the school
+    const p = pit(t, o.name); p.tm = o; p.hand = p.hand || (o.hand || '').toUpperCase().slice(0, 1);
+  }
+  S.players.forEach((pl, i) => {
+    if (pl.bc || !(pl.pit || []).length) return;
+    const t = team(teamName(pl.t)); if (!t) return;
+    const p = pit(t, pl.n); p.idx.push(i); if (pl.th) p.hand = pl.th;
+  });
+  const byId = new Map(); for (const t of teams.values()) for (const p of t.p.values()) byId.set(p.id, p);
+  S.scout = { year, nc, teams, byId, sample: !!nc?.sample };
+  return S.scout;
+}
+const sampleTag = sx => sx.sample ? '<div class="sample-tag">Sample TruMedia numbers (preview only)</div>' : '';
+
+async function pageScout() {
+  setNav('scout');
+  const sx = await scoutIndex(), plans = await loadGameplans();
+  const ui = S.ui.scout || (S.ui.scout = { conf: '', q: '' });
+  const confs = [...new Set([...sx.teams.values()].map(t => t.conf).filter(Boolean))].sort();
+  if (!ui.conf) ui.conf = confs.includes('ACC') ? 'ACC' : 'all';
+  const planCount = t => [...t.p.keys()].filter(id => plans[id]).length;
+  const tmCount = t => [...t.p.values()].filter(p => p.idx.length).length;
+  const rows = [...sx.teams.values()].filter(t => (ui.conf === 'all' || t.conf === ui.conf || (ui.conf === 'tm' && tmCount(t)) || (ui.conf === 'plans' && planCount(t)))
+    && (!ui.q || normName(t.name).includes(normName(ui.q))))
+    .map(t => ({ t, name: t.name, conf: t.conf, n: [...t.p.values()].filter(p => p.tm).length, tm: tmCount(t), plans: planCount(t) }));
+  const recent = Object.entries(plans).sort((a, b) => (b[1].at || '').localeCompare(a[1].at || '')).slice(0, 8);
+  app.innerHTML = `<div class="phead"><div><span class="eyebrow">Opposing pitchers</span><h1>Scouting</h1></div>
+    <div class="controls"><select id="sc-conf" aria-label="Teams">${[['tm', 'Teams with TrackMan'], ['plans', 'Teams with gameplans'], ...confs.map(c => [c, c]), ['all', 'All D1']].map(([v, l]) => `<option value="${esc(v)}" ${ui.conf === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      <input type="search" id="sc-q" placeholder="Find a team" value="${esc(ui.q)}" style="width:170px"></div></div>
+    ${sampleTag(sx)}
+    <p class="muted" style="margin-top:0">Pick a team, then a pitcher: season line from TruMedia${sx.year ? ` (${sx.year})` : ''}, pitch plot, pitch metrics and heat maps from our TrackMan games against him, and the staff's gameplan vs RHH and LHH.</p>
+    ${recent.length ? `<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Latest gameplans</h2></div><div class="chips">${recent.map(([id, g]) => `<a class="chip" href="${scoutHref(id)}">${esc(g.name || id)} <span class="muted">${esc(g.team || '')}</span></a>`).join('')}</div></section>` : ''}
+    ${rows.length ? table('t-scout', [{ k: 'name', label: 'Team', l: true, html: o => `<a href="#scout-t-${encodeURIComponent(o.t.k)}">${esc(o.name)}</a>` }, { k: 'conf', label: 'Conf', l: true },
+      { k: 'n', label: 'Pitchers (TruMedia)', fmt: F.int }, { k: 'tm', label: 'With TrackMan', fmt: F.int, tip: 'Pitchers we have pitch-by-pitch TrackMan data on' }, { k: 'plans', label: 'Gameplans', fmt: v => v ? F.int(v) : '' }], rows, { sort: 'name', asc: true, limit: 400 })
+      : `<p class="empty">No teams match.${sx.nc ? '' : ' TruMedia data hasn\'t been pulled yet, so only teams we have TrackMan on are listed.'}</p>`}`;
+  $('#sc-conf').onchange = e => { ui.conf = e.target.value; route(); };
+  $('#sc-q').onchange = e => { ui.q = e.target.value.trim(); route(); };
+}
+
+async function pageScoutTeam(k) {
+  setNav('scout');
+  const sx = await scoutIndex(), plans = await loadGameplans(), t = sx.teams.get(k);
+  if (!t) { app.innerHTML = '<p class="empty">Team not found. <a href="#scout">Back to scouting</a></p>'; return; }
+  const v = (p, c) => p.tm?.[c] ?? null;
+  const rows = [...t.p.values()].map(p => ({ p, name: p.name, hand: p.hand, G: v(p, 'G'), GS: v(p, 'GS'), IP: v(p, 'IP'), ERA: v(p, 'ERA'), WHIP: v(p, 'WHIP'), K: v(p, 'K%|PIT'), BB: v(p, 'BB%|PIT'), FB: v(p, 'FBVel'),
+    tm: p.idx.flatMap(i => S.players[i].pit || []).length, plan: plans[p.id] ? 1 : 0 }));
+  const nf = c => x => ncaaFmt(c, x);
+  app.innerHTML = `<div class="phead"><div><span class="eyebrow">Scouting${t.conf ? ' · ' + esc(t.conf) : ''}</span><h1>${esc(t.name)} pitchers</h1></div><div class="controls"><a class="btn" href="#scout">All teams</a></div></div>
+    ${sampleTag(sx)}
+    ${table('t-scout-team', [{ k: 'name', label: 'Pitcher', l: true, html: o => `<a href="${scoutHref(o.p.id)}">${esc(o.name)}</a>` }, { k: 'hand', label: 'T', l: true },
+      { k: 'G', label: 'G', fmt: F.int }, { k: 'GS', label: 'GS', fmt: F.int }, { k: 'IP', label: 'IP', fmt: nf('IP') }, { k: 'ERA', label: 'ERA', fmt: nf('ERA'), asc: true }, { k: 'WHIP', label: 'WHIP', fmt: nf('WHIP'), asc: true },
+      { k: 'K', label: 'K%', fmt: nf('K%') }, { k: 'BB', label: 'BB%', fmt: nf('BB%'), asc: true }, { k: 'FB', label: 'FB velo', fmt: nf('FBVel') },
+      { k: 'tm', label: 'TrackMan', html: o => o.tm ? '<span class="sflag good">Pitch data</span>' : '<span class="muted">—</span>', tip: 'We have pitch-by-pitch TrackMan on him (pitch plot and heat maps)' },
+      { k: 'plan', label: 'Gameplan', html: o => o.plan ? '✓' : '' }], rows, { sort: rows.some(o => o.IP != null) ? 'IP' : 'tm' })}`;
+}
+
+const SC_COUNTS = [['all', 'All counts'], ['first', 'First pitch'], ['ahead', 'Hitter ahead'], ['even', 'Even'], ['behind', 'Pitcher ahead'], ['2k', '2 strikes']];
+const scCount = (r, c) => c === 'all' || (c === 'first' && r.b === 0 && r.s === 0) || (c === 'ahead' && r.b > r.s) || (c === 'even' && r.b === r.s && !(r.b === 0 && r.s === 0)) || (c === 'behind' && r.s > r.b) || (c === '2k' && r.s === 2);
+function scMixTable(rows, types) {
+  const line = c => { const a = rows.filter(r => scCount(r, c)); return `<tr><th class="l">${SC_COUNTS.find(x => x[0] === c)[1]}</th><td>${a.length}</td>${types.map(k => { const n = a.filter(r => r.pt === k).length; return `<td>${a.length ? Math.round(100 * n / a.length) + '%' : '—'}</td>`; }).join('')}</tr>`; };
+  return `<table class="sc-mix"><thead><tr><th class="l">Count</th><th>#</th>${types.map(k => `<th>${ptDot(k)}${k}</th>`).join('')}</tr></thead><tbody>${SC_COUNTS.map(([c]) => line(c)).join('')}</tbody></table>`;
+}
+function planText(s) {   // escape; "- " lines become bullets
+  const lines = String(s || '').split(/\r?\n/); let out = '', inList = false;
+  for (const l of lines) {
+    const m = l.match(/^\s*[-•*]\s+(.*)$/);
+    if (m) { if (!inList) { out += '<ul>'; inList = true; } out += `<li>${esc(m[1])}</li>`; continue; }
+    if (inList) { out += '</ul>'; inList = false; }
+    out += l.trim() ? `<p>${esc(l)}</p>` : '';
+  }
+  return out + (inList ? '</ul>' : '');
+}
+
+async function pageScoutPitcher(id) {
+  setNav('scout');
+  const sx = await scoutIndex(), plans = await loadGameplans(), p = sx.byId.get(id);
+  if (!p) { app.innerHTML = '<p class="empty">Pitcher not found. <a href="#scout">Back to scouting</a></p>'; return; }
+  const ui = S.ui['sc:' + id] || (S.ui['sc:' + id] = { season: 'all', pt: 'all', count: 'all', edit: false });
+  const seasIds = [...new Set(p.idx.flatMap(i => S.players[i].pit || []))].sort((a, b) => S.meta.seasons.findIndex(s => s.id === a) - S.meta.seasons.findIndex(s => s.id === b));
+  for (const s of seasIds) await loadSeason(s);
+  const allRows = seasIds.flatMap(s => p.idx.flatMap(i => S.seasons[s].byP.get(i) || []));
+  const rows = ui.season === 'all' ? allRows : allRows.filter(r => r.sid === ui.season), tr = rows.filter(r => !r.nt);
+  const th = p.hand === 'L' ? 'LHP' : p.hand === 'R' ? 'RHP' : 'P', o = p.tm, nf = (c, v) => ncaaFmt(c, v);
+  const plan = plans[id] || null, coach = coachOf(ls.get('me', null));
+  const dkey = 'gpdraft:' + id, draft = ls.get(dkey, null);
+  // stat line: TruMedia season if we have it, else TrackMan vs BC
+  const tmLine = o ? [['G', 'G'], ['GS', 'GS'], ['IP', 'IP'], ['ERA', 'ERA'], ['FIP', 'FIP'], ['WHIP', 'WHIP'], ['K%', 'K%|PIT'], ['BB%', 'BB%|PIT'], ['AVG', 'BA|PIT'], ['Whiff%', 'Whiff%|PIT'], ['Chase%', 'Chase%|PIT'], ['GB%', 'GB%|PIT']]
+    .filter(([, c]) => c in o).map(([l, c]) => [l, nf(c, o[c])]) : null;
+  const st = stats(rows), ip = st.outs / 3;
+  const bcLine = rows.length ? [['G', st.G], ['IP', F.ip(st.outs)], ['RA9', ip ? (9 * st.runs / ip).toFixed(2) : '—'], ['PA', st.PA], ['H', st.H], ['HR', st.HR], ['K%', F.pct(st.kPct)], ['BB%', F.pct(st.bbPct)], ['AVG', F.avg(st.avg)], ['OPS', F.avg(st.ops)], ['Whiff%', F.pct(st.whiff)], ['Chase%', F.pct(st.chase)]] : null;
+  const lineHtml = (items) => `<div class="sc-line">${items.map(([l, v]) => `<div><b>${v}</b><span>${l}</span></div>`).join('')}</div>`;
+  const ars = arsenal(tr).filter(a => a.pt !== 'UN' && a.n >= 3), types = ars.map(a => a.pt);
+  if (ui.pt !== 'all' && !types.includes(ui.pt)) ui.pt = 'all';
+  const n1 = v => (v == null ? '—' : v.toFixed(1)), pc = v => (v == null ? '—' : Math.round(v * 100) + '%');
+  const split = (lab, s2) => `<tr><th class="l">${lab}</th><td>${s2.PA}</td><td>${F.avg(s2.avg)}</td><td>${F.avg(s2.obp)}</td><td>${F.avg(s2.slg)}</td><td>${s2.HR}</td><td>${F.pct(s2.kPct)}</td><td>${F.pct(s2.bbPct)}</td><td>${F.pct(s2.whiff)}</td><td>${F.pct(s2.chase)}</td></tr>`;
+  const hmRows = side => tr.filter(r => r.bs === side && (ui.pt === 'all' || r.pt === ui.pt) && scCount(r, ui.count));
+  const seasonOpts = [['all', seasIds.length > 1 ? 'All seasons' : (seasIds[0] ? seasonLabel(seasIds[0]) : 'All')], ...(seasIds.length > 1 ? seasIds.map(s => [s, seasonLabel(s)]) : [])];
+  const planCol = (side, txt) => `<div class="gp-col ${side}"><h3>vs ${side.toUpperCase()}</h3>${txt ? planText(txt) : '<p class="muted">No plan written yet.</p>'}</div>`;
+  const editor = () => `<div class="gp-edit">
+      <label><b class="r">vs RHH</b><textarea id="gp-rhh" rows="8" placeholder="- Sits FB away, elevates with 2K&#10;- Spin is a chase pitch: lay off below the knees">${esc(draft?.rhh ?? plan?.rhh ?? '')}</textarea></label>
+      <label><b class="l">vs LHH</b><textarea id="gp-lhh" rows="8" placeholder="- Changeup is his out pitch&#10;- Hunt FB middle-in early">${esc(draft?.lhh ?? plan?.lhh ?? '')}</textarea></label>
+      <div class="gp-actions"><button type="button" class="btn vbtn-hi" id="gp-pub">Publish</button><button type="button" class="btn" id="gp-cancel">Cancel</button>
+        <span class="muted small" id="gp-msg">Publish opens GitHub with the plan filled in: tap <b>Commit changes</b> and it's live for everyone in a few minutes. Start a line with "- " for a bullet.</span></div></div>`;
+  app.innerHTML = `<div class="phead"><div><span class="eyebrow"><a href="#scout-t-${encodeURIComponent(p.team.k)}">${esc(p.team.name)}</a>${p.team.conf ? ' · ' + esc(p.team.conf) : ''}</span><h1>${esc(p.name)} <span class="sc-hand">${th}</span></h1></div>
+    <div class="controls">${tr.length ? segmented('sc-season', seasonOpts, ui.season, v => { ui.season = v; route(); }) : ''}<a class="btn" href="#scout-t-${encodeURIComponent(p.team.k)}">${esc(p.team.name)} staff</a></div></div>
+    ${sampleTag(sx)}
+    <section class="panel sc-sec"><div class="panel-h"><h2>Stat line</h2><span class="note">${tmLine ? `TruMedia ${sx.year} season` : 'No TruMedia line for him'}</span></div>
+      ${tmLine ? lineHtml(tmLine) : ''}
+      ${bcLine ? `${tmLine ? '<div class="panel-h" style="margin:14px 0 8px"><h3 style="margin:0">Against BC</h3><span class="note">TrackMan · RA9 = runs per 9 (earned runs aren\'t marked)</span></div>' : ''}${lineHtml(bcLine)}` : ''}
+      ${!tmLine && !bcLine ? '<p class="empty">No numbers for him yet.</p>' : ''}</section>
+    ${tr.length ? `
+    <div class="grid2 sc-sec">
+      <section class="panel"><div class="panel-h"><h2>Pitch plot</h2><span class="note">${tr.length} TrackMan pitches · pitcher's view</span></div>
+        <div class="sc-mv">${movementChart(tr, new Set(types), { plain: true })}</div>
+        <div class="chips">${ars.map(a => `<span class="chip">${ptDot(a.pt)}${PT[a.pt].n} · ${a.n}</span>`).join('')}</div></section>
+      <section class="panel"><div class="panel-h"><h2>Splits</h2><span class="note">Against BC</span></div>
+        <div class="tbl-wrap"><table><thead><tr><th class="l">vs</th><th>PA</th><th>AVG</th><th>OBP</th><th>SLG</th><th>HR</th><th>K%</th><th>BB%</th><th>Whiff%</th><th>Chase%</th></tr></thead>
+        <tbody>${split('All', st)}${split('RHH', stats(rows.filter(r => r.bs === 'R')))}${split('LHH', stats(rows.filter(r => r.bs === 'L')))}</tbody></table></div>
+        <h3 style="margin:16px 0 6px">Pitch mix by count</h3>
+        <div class="sc-mixes"><div><div class="sc-side r">vs RHH</div>${scMixTable(tr.filter(r => r.bs === 'R'), types)}</div><div><div class="sc-side l">vs LHH</div>${scMixTable(tr.filter(r => r.bs === 'L'), types)}</div></div></section>
+    </div>
+    <section class="panel sc-sec"><div class="panel-h"><h2>Pitch metrics</h2></div>
+      <div class="tbl-wrap"><table><thead><tr><th class="l">Pitch</th><th>#</th><th>vs RHH</th><th>vs LHH</th><th>Velo</th><th>Max</th><th>Spin</th><th>IVB</th><th>HB</th><th>VAA</th><th>Ext</th><th>RelH</th><th>Zone%</th><th>Whiff%</th><th>Chase%</th><th>AVG</th></tr></thead>
+      <tbody>${ars.map(a => `<tr><th class="l">${ptDot(a.pt)}${PT[a.pt].n}</th><td>${a.n}</td><td>${pc(a.useR)}</td><td>${pc(a.useL)}</td><td>${n1(a.v)}</td><td>${n1(a.vmax)}</td><td>${a.spin == null ? '—' : Math.round(a.spin)}</td><td>${n1(a.ivb)}</td><td>${n1(a.hb)}</td><td>${n1(a.vaa)}</td><td>${n1(a.ext)}</td><td>${n1(a.rh)}</td><td>${pc(a.zone)}</td><td>${pc(a.whiff)}</td><td>${pc(a.chase)}</td><td>${F.avg(a.ba)}</td></tr>`).join('')}</tbody></table></div></section>
+    <section class="panel sc-sec"><div class="panel-h"><h2>Heat maps</h2><span class="note">Where he throws it · catcher's view</span></div>
+      <div class="controls" style="margin-bottom:10px">${segmented('sc-pt', [['all', 'All pitches'], ...types.map(k => [k, PT[k].n])], ui.pt, v => { ui.pt = v; route(); })}
+        <select id="sc-count" aria-label="Count">${SC_COUNTS.map(([v, l]) => `<option value="${v}" ${ui.count === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="sc-heat">${['R', 'L'].map(sd => { const a = hmRows(sd); return `<div><div class="sc-side ${sd === 'R' ? 'r' : 'l'}">vs ${sd}HH <span class="muted">${a.length} pitches</span></div>${heatMap(a, true)}</div>`; }).join('')}</div></section>`
+    : `<section class="panel sc-sec"><div class="panel-h"><h2>Pitch data</h2></div><p class="muted" style="margin:0">No TrackMan pitches on him yet, so there's no pitch plot, pitch metrics or heat maps. They fill in once we face him, or once his team's TrackMan files are added to the data folder.${o && o.FBVel != null ? ` From TruMedia: fastball ${nf('FBVel', o.FBVel)} mph (max ${nf('MaxFBVel', o.MaxFBVel)})${o.FBSpin != null ? `, ${nf('FBSpin', o.FBSpin)} rpm` : ''}${o.Extension != null ? `, ${nf('Extension', o.Extension)} ft extension` : ''}.` : ''}</p></section>`}
+    <section class="panel sc-sec gp"><div class="panel-h"><h2>Gameplan</h2><span class="note">${plan ? `${plan.by ? 'By ' + esc(plan.by) + ' · ' : ''}${plan.at ? esc(new Date(plan.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })) : ''}` : ''}
+      ${coach && !ui.edit ? `<button type="button" class="btn" id="gp-open">${plan ? 'Edit gameplan' : 'Write gameplan'}</button>` : ''}</span></div>
+      ${ui.edit && coach ? editor() : `<div class="gp-cols">${planCol('rhh', plan?.rhh)}${planCol('lhh', plan?.lhh)}</div>${!coach ? '<p class="muted small" style="margin:10px 0 0">Coaches: pick your name under Profile to write gameplans.</p>' : ''}`}</section>`;
+  const sc = $('#sc-count'); if (sc) sc.onchange = () => { ui.count = sc.value; route(); };
+  const op = $('#gp-open'); if (op) op.onclick = () => { ui.edit = true; route(); };
+  if (ui.edit && coach) {
+    const ta = () => ({ rhh: $('#gp-rhh').value, lhh: $('#gp-lhh').value });
+    ['#gp-rhh', '#gp-lhh'].forEach(s => $(s).addEventListener('input', () => ls.set(dkey, ta())));
+    $('#gp-cancel').onclick = () => { ui.edit = false; route(); };
+    $('#gp-pub').onclick = () => {
+      const t = ta(), now = new Date(), stamp = now.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      const rec = { id, name: p.name, team: p.team.name, rhh: t.rhh.trim(), lhh: t.lhh.trim(), by: coach.name, at: now.toISOString() };
+      const fn = `${id.replace(/[^a-z0-9]+/g, '-')}--${stamp}.json`;
+      const url = `https://github.com/${GH_REPO}/new/main/data/gameplans?filename=${encodeURIComponent(fn)}&value=${encodeURIComponent(JSON.stringify(rec, null, 2) + '\n')}`;
+      window.open(url, '_blank', 'noopener');
+      $('#gp-msg').innerHTML = '<b>GitHub opened in a new tab.</b> Tap <b>Commit changes</b> there; the plan shows here for everyone once the site rebuilds (a few minutes). Your text stays saved on this device until then.';
+    };
+  }
 }
 
 async function pageGames() {
@@ -2935,7 +3113,7 @@ async function route() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ''));
   S.vreg = [];
   if (S.section == null) S.section = ls.get('section', 'hitting');
-  { const sec = sectionFor(h || 'home'); if (sec && (SEC_OF[h] || h.startsWith('pg-') || h.startsWith('ncaa-p-'))) S.section = sec; }
+  { const sec = sectionFor(h || 'home'); if (sec && (SEC_OF[h] || h.startsWith('pg-') || h.startsWith('ncaa-p-') || h.startsWith('scout-'))) S.section = sec; }
   drawSubnav(h);
   try {
     if (!S.meta.seasons.length) { app.innerHTML = '<p class="empty">No data has been uploaded yet. Add TrackMan files to the data folder of the repository.</p>'; return; }
@@ -2948,6 +3126,9 @@ async function route() {
     else if (h.startsWith('player-')) await pagePlayer(h.slice(7));
     else if (h.startsWith('pg-')) { const m = h.match(/^pg-(\d{4}-(?:spring|fall))-(\d+)-(hit|pit)-(.+)$/); if (m) await pagePlayerGame(m[1], +m[2], m[3], m[4]); }
     else if (h === 'search') await pageSearch();
+    else if (h === 'scout') await pageScout();
+    else if (h.startsWith('scout-t-')) await pageScoutTeam(decodeURIComponent(h.slice(8)));
+    else if (h.startsWith('scout-p-')) await pageScoutPitcher(decodeURIComponent(h.slice(8)));
     else if (h === 'ncaa') await pageNcaa();
     else if (h.startsWith('ncaa-p-')) { const m = h.match(/^ncaa-p-(\d{4})-(hitting|pitching)-(.+)$/); if (m) await pageNcaaPlayer(+m[1], m[2], m[3]); }
     else if (h === 'glossary') pageGlossary();
