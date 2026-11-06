@@ -770,6 +770,27 @@ def gameplans():
     return {"file": "gameplans.json", "pitchers": len(out)}
 
 
+def dev_focus():
+    """Weekly development focus coaches publish from player pages (data/focus/*.json, one file per save).
+    Written to site/data/focus.json: for each player, saves newest first (the first is this week's)."""
+    out, d = {}, DATA_DIR / "focus"
+    for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+        try:
+            r = json.loads(f.read_text(encoding="utf-8-sig"))
+        except ValueError:
+            log(f"  ! focus {f.name} isn't valid JSON; skipped")
+            continue
+        key = str(r.get("key") or "").strip()
+        if key:
+            out.setdefault(key, []).append({k: str(r.get(k) or "")[:6000] for k in ("focus", "by", "at", "week")})
+    for key in out:
+        out[key] = sorted(out[key], key=lambda r: r["at"], reverse=True)[:30]
+    (OUT_DIR / "focus.json").write_text(json.dumps(out, separators=(",", ":")))
+    if out:
+        log(f"  development focus: {len(out)} players")
+    return {"file": "focus.json", "players": len(out)}
+
+
 def fix_batter_sides(df: pd.DataFrame):
     """BC hitters: bats.json first, then the roster's B/T. TrackMan operators sometimes tag the
     wrong side, which made one-sided hitters look like switch hitters."""
@@ -1088,6 +1109,7 @@ def build():
         "team_aliases": (json.loads((ROOT / "scripts" / "trumedia.json").read_text()).get("team_aliases", {})
                          if (ROOT / "scripts" / "trumedia.json").exists() else {}),
         "gameplans": gameplans(),
+        "focus": dev_focus(),
     }
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
     log(f"Done in {time.time()-t0:.1f}s. {len(players_out)} players, {len(seasons_meta)} seasons.")
