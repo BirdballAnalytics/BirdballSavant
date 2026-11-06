@@ -60,7 +60,7 @@ async function getJSON(u) {
   return r.json();
 }
 async function loadMeta() {
-  S.meta = await getJSON('data/meta.json');
+  [S.meta] = await Promise.all([getJSON('data/meta.json'), sbCfg()]);
   S.players = S.meta.players;
   S.players.forEach((p, i) => S.pidx.set(p.k, i));
   const saved = ls.get('season', null);
@@ -1582,6 +1582,78 @@ async function pageSpray() {
   run();
 }
 
+/* ---------- Coach notes saved in Supabase (scouting gameplans + weekly development focus) ----------
+   site/supabase.json holds the project URL and its public (anon / publishable) key. Anyone can read notes; only
+   signed-in coaches on the coaches list can add them (enforced by Supabase, see supabase-setup.sql). Without the
+   file, the site falls back to publishing through GitHub. Notes are never edited in place: each save is a new row
+   and the newest one shows, so history is kept. */
+const SB = { cfg: undefined };
+async function sbCfg() {
+  if (SB.cfg !== undefined) return SB.cfg;
+  try { const c = await getJSON('supabase.json'); SB.cfg = c && /^https:\/\//.test(c.url || '') && c.anonKey ? { url: c.url.replace(/\/+$/, ''), key: c.anonKey } : null; } catch { SB.cfg = null; }
+  return SB.cfg;
+}
+const sbSession = () => ls.get('sb:session', null);
+const sbSignOut = () => ls.set('sb:session', null);
+async function sbRaw(path, opts = {}, token = null) {
+  const c = SB.cfg; if (!c) throw new Error('Supabase is not set up');
+  const headers = { apikey: c.key, 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const r = await fetch(c.url + path, { ...opts, headers, cache: 'no-store' });
+  const t = await r.text(); let d = null; try { d = t ? JSON.parse(t) : null; } catch { /* not JSON */ }
+  if (!r.ok) {
+    const m = d?.msg || d?.message || d?.error_description || d?.error || `error ${r.status}`;
+    throw new Error(/invalid login credentials/i.test(m) ? 'Wrong email or password.' : /coach list/i.test(m) ? "This account isn't on the coach list." : m);
+  }
+  return d;
+}
+function sbStore(d, name) { ls.set('sb:session', { at: d.access_token, rt: d.refresh_token, exp: Date.now() + (d.expires_in || 3600) * 1000, uid: d.user?.id, email: d.user?.email, name }); }
+async function sbToken() {
+  const s = sbSession(); if (!s) throw new Error('Sign in first.');
+  if (Date.now() < s.exp - 60000) return s.at;
+  try { sbStore(await sbRaw('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: JSON.stringify({ refresh_token: s.rt }) }), s.name); }
+  catch { sbSignOut(); throw new Error('Your sign-in expired. Sign in again.'); }
+  return sbSession().at;
+}
+async function sbSignIn(email, password) {
+  const d = await sbRaw('/auth/v1/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email, password }) });
+  sbStore(d, null);
+  const rows = await sbRaw(`/rest/v1/coaches?select=name&user_id=eq.${encodeURIComponent(d.user.id)}`, {}, d.access_token);
+  if (!rows?.length) { sbSignOut(); throw new Error("This account isn't on the coach list. Add it in Supabase (see the setup steps)."); }
+  sbStore(d, rows[0].name);
+  return rows[0].name;
+}
+async function sbAddNote(kind, subject, body, week = null) {
+  const rows = await sbRaw('/rest/v1/notes', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ kind, subject, body, week }]) }, await sbToken());
+  return rows[0];
+}
+const sbNotes = q => sbRaw('/rest/v1/notes?' + q);
+// who may write: with Supabase, anyone signed in as a coach (or who picked a coach profile and will sign in); otherwise a coach profile
+const canWrite = () => !!(coachOf(ls.get('me', null)) || (SB.cfg && sbSession()));
+// sign-in box shown in place of the Save button until a coach signs in
+function signInBox(pre) {
+  return `<div class="sb-login" id="${pre}-login"><div class="muted small" style="flex-basis:100%">Sign in with your coach account to save. You stay signed in on this device.</div>
+    <input type="email" id="${pre}-email" placeholder="Email" autocomplete="username"><input type="password" id="${pre}-pw" placeholder="Password" autocomplete="current-password">
+    <button type="button" class="btn vbtn-hi" id="${pre}-signin">Sign in</button><span class="small sb-err" id="${pre}-err"></span></div>`;
+}
+function bindSignIn(pre) {
+  const b = $(`#${pre}-signin`); if (!b) return;
+  const go = async () => {
+    const e = $(`#${pre}-err`); e.textContent = ''; b.disabled = true;
+    try { await sbSignIn($(`#${pre}-email`).value.trim(), $(`#${pre}-pw`).value); route(); }
+    catch (err) { e.textContent = err.message; b.disabled = false; }
+  };
+  b.onclick = go; $(`#${pre}-pw`).onkeydown = ev => { if (ev.key === 'Enter') go(); };
+}
+const whoLine = () => { const s = sbSession(); return SB.cfg && s ? `<span class="muted small">Signed in as <b>${esc(s.name || s.email)}</b> · <button type="button" class="linkbtn sb-out">Sign out</button></span>` : ''; };
+document.addEventListener('click', e => { if (e.target.closest('.sb-out')) { sbSignOut(); route(); } });
+// Save button area for an editor: Supabase save (sign in first if needed) or the GitHub publish fallback
+function saveArea(pre, label) {
+  if (SB.cfg && !sbSession()) return signInBox(pre);
+  return `<div class="gp-actions"><button type="button" class="btn vbtn-hi" id="${pre}-pub">${esc(SB.cfg ? label.replace('Publish', 'Save') : label)}</button><button type="button" class="btn" id="${pre}-cancel">Cancel</button>
+    ${whoLine()}<span class="muted small" id="${pre}-msg" style="flex-basis:100%">${SB.cfg ? 'Saves straight to the site: players see it right away.' : 'Publish opens GitHub with it filled in: tap <b>Commit changes</b> and it shows here in a few minutes.'} Start a line with "- " for a bullet.</span></div>`;
+}
+
 /* ---------- Scouting: opposing pitchers for our hitters (TruMedia season line + TrackMan pitch data) ---------- */
 // A pitcher is identified by school + name, so TrackMan ("Cal", "Smith, John") and TruMedia
 // ("California", "John Smith") land on the same page, and a gameplan follows him across seasons.
@@ -1594,7 +1666,14 @@ const GH_REPO = (() => { const h = location.hostname.match(/^([^.]+)\.github\.io
 const scoutHref = id => '#scout-p-' + encodeURIComponent(id);
 async function loadGameplans() {
   if (S.plans) return S.plans;
-  try { S.plans = await getJSON('data/' + (S.meta.gameplans?.file || 'gameplans.json')); } catch { S.plans = {}; }
+  let base = {}; try { base = await getJSON('data/' + (S.meta.gameplans?.file || 'gameplans.json')); } catch { /* none yet */ }
+  if (SB.cfg) try {
+    for (const r of await sbNotes('kind=eq.gameplan&select=subject,body,by_name,created_at&order=created_at.desc&limit=3000')) {
+      const at = r.created_at, cur = base[r.subject];
+      if (!cur || (cur.at || '') < at) base[r.subject] = { ...(r.body || {}), by: r.by_name || '', at, sb: true };
+    }
+  } catch (err) { console.warn('gameplans from Supabase:', err.message); }
+  S.plans = base;
   return S.plans;
 }
 async function scoutIndex() {
@@ -1693,7 +1772,7 @@ async function pageScoutPitcher(id) {
   const allRows = seasIds.flatMap(s => p.idx.flatMap(i => S.seasons[s].byP.get(i) || []));
   const rows = ui.season === 'all' ? allRows : allRows.filter(r => r.sid === ui.season), tr = rows.filter(r => !r.nt);
   const th = p.hand === 'L' ? 'LHP' : p.hand === 'R' ? 'RHP' : 'P', o = p.tm, nf = (c, v) => ncaaFmt(c, v);
-  const plan = plans[id] || null, coach = coachOf(ls.get('me', null));
+  const plan = plans[id] || null, coach = canWrite();
   const dkey = 'gpdraft:' + id, draft = ls.get(dkey, null);
   // stat line: TruMedia season if we have it, else TrackMan vs BC
   const tmLine = o ? [['G', 'G'], ['GS', 'GS'], ['IP', 'IP'], ['ERA', 'ERA'], ['FIP', 'FIP'], ['WHIP', 'WHIP'], ['K%', 'K%|PIT'], ['BB%', 'BB%|PIT'], ['AVG', 'BA|PIT'], ['Whiff%', 'Whiff%|PIT'], ['Chase%', 'Chase%|PIT'], ['GB%', 'GB%|PIT']]
@@ -1711,8 +1790,7 @@ async function pageScoutPitcher(id) {
   const editor = () => `<div class="gp-edit">
       <label><b class="r">vs RHH</b><textarea id="gp-rhh" rows="8" placeholder="- Sits FB away, elevates with 2K&#10;- Spin is a chase pitch: lay off below the knees">${esc(draft?.rhh ?? plan?.rhh ?? '')}</textarea></label>
       <label><b class="l">vs LHH</b><textarea id="gp-lhh" rows="8" placeholder="- Changeup is his out pitch&#10;- Hunt FB middle-in early">${esc(draft?.lhh ?? plan?.lhh ?? '')}</textarea></label>
-      <div class="gp-actions"><button type="button" class="btn vbtn-hi" id="gp-pub">Publish</button><button type="button" class="btn" id="gp-cancel">Cancel</button>
-        <span class="muted small" id="gp-msg">Publish opens GitHub with the plan filled in: tap <b>Commit changes</b> and it's live for everyone in a few minutes. Start a line with "- " for a bullet.</span></div></div>`;
+      ${saveArea('gp', 'Publish')}${SB.cfg && !sbSession() ? '<div class="gp-actions"><button type="button" class="btn" id="gp-cancel">Cancel</button></div>' : ''}</div>`;
   app.innerHTML = `<div class="phead"><div><span class="eyebrow"><a href="#scout-t-${encodeURIComponent(p.team.k)}">${esc(p.team.name)}</a>${p.team.conf ? ' · ' + esc(p.team.conf) : ''}</span><h1>${esc(p.name)} <span class="sc-hand">${th}</span></h1></div>
     <div class="controls">${tr.length ? segmented('sc-season', seasonOpts, ui.season, v => { ui.season = v; route(); }) : ''}<a class="btn" href="#scout-t-${encodeURIComponent(p.team.k)}">${esc(p.team.name)} staff</a></div></div>
     ${sampleTag(sx)}
@@ -1742,15 +1820,23 @@ async function pageScoutPitcher(id) {
     <section class="panel sc-sec gp"><div class="panel-h"><h2>Gameplan</h2><span class="note">${plan ? `${plan.by ? 'By ' + esc(plan.by) + ' · ' : ''}${plan.at ? esc(new Date(plan.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })) : ''}` : ''}
       ${coach && !ui.edit ? `<button type="button" class="btn" id="gp-open">${plan ? 'Edit gameplan' : 'Write gameplan'}</button>` : ''}</span></div>
       ${ui.edit && coach ? editor() : `<div class="gp-cols">${planCol('rhh', plan?.rhh)}${planCol('lhh', plan?.lhh)}</div>${!coach ? '<p class="muted small" style="margin:10px 0 0">Coaches: pick your name under Profile to write gameplans.</p>' : ''}`}</section>`;
+  bindSignIn('gp');
   const sc = $('#sc-count'); if (sc) sc.onchange = () => { ui.count = sc.value; route(); };
   const op = $('#gp-open'); if (op) op.onclick = () => { ui.edit = true; route(); };
   if (ui.edit && coach) {
     const ta = () => ({ rhh: $('#gp-rhh').value, lhh: $('#gp-lhh').value });
     ['#gp-rhh', '#gp-lhh'].forEach(s => $(s).addEventListener('input', () => ls.set(dkey, ta())));
     $('#gp-cancel').onclick = () => { ui.edit = false; route(); };
-    $('#gp-pub').onclick = () => {
+    const pub = $('#gp-pub'); if (pub) pub.onclick = async () => {
+      if (SB.cfg) {
+        const t = ta(), body = { name: p.name, team: p.team.name, rhh: t.rhh.trim(), lhh: t.lhh.trim() };
+        pub.disabled = true; $('#gp-msg').textContent = 'Saving…';
+        try { const r = await sbAddNote('gameplan', id, body); S.plans[id] = { ...body, by: r.by_name || '', at: r.created_at, sb: true }; ls.set(dkey, null); ui.edit = false; route(); }
+        catch (err) { pub.disabled = false; $('#gp-msg').innerHTML = `<span class="sb-err">Not saved: ${esc(err.message)}</span> Your text is kept on this device.`; if (!sbSession()) route(); }
+        return;
+      }
       const t = ta(), now = new Date(), stamp = now.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
-      const rec = { id, name: p.name, team: p.team.name, rhh: t.rhh.trim(), lhh: t.lhh.trim(), by: coach.name, at: now.toISOString() };
+      const rec = { id, name: p.name, team: p.team.name, rhh: t.rhh.trim(), lhh: t.lhh.trim(), by: coachOf(ls.get('me', null))?.name || '', at: now.toISOString() };
       const fn = `${id.replace(/[^a-z0-9]+/g, '-')}--${stamp}.json`;
       const url = `https://github.com/${GH_REPO}/new/main/data/gameplans?filename=${encodeURIComponent(fn)}&value=${encodeURIComponent(JSON.stringify(rec, null, 2) + '\n')}`;
       window.open(url, '_blank', 'noopener');
@@ -1955,34 +2041,49 @@ async function pageNcaaPlayer(year, side, rawId) {
 
 /* ---------- player page ---------- */
 /* ---------- Weekly development focus (coaches publish from the player page through GitHub) ---------- */
-async function loadFocus() {
-  if (S.focus) return S.focus;
-  try { S.focus = await getJSON('data/' + (S.meta.focus?.file || 'focus.json')); } catch { S.focus = {}; }
-  return S.focus;
+async function loadFocus(key) {
+  if (!S.focusJ) { try { S.focusJ = await getJSON('data/' + (S.meta.focus?.file || 'focus.json')); } catch { S.focusJ = {}; } }
+  S.focusC = S.focusC || {};
+  if (S.focusC[key]) return S.focusC[key];
+  let list = [...(S.focusJ[key] || [])];
+  if (SB.cfg) try {
+    const rows = await sbNotes(`kind=eq.focus&subject=eq.${encodeURIComponent(key)}&select=body,week,by_name,created_at&order=created_at.desc&limit=40`);
+    list = list.concat(rows.map(r => ({ focus: r.body?.focus || '', week: r.week || '', by: r.by_name || '', at: r.created_at })));
+  } catch (err) { console.warn('focus from Supabase:', err.message); }
+  list.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+  return (S.focusC[key] = list);
 }
 const weekOf = d => { const x = new Date(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };   // that week's Monday
 const fmtWeek = d => 'Week of ' + (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + 'T12:00:00') : new Date(d)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 function focusPanel(key, p, list, ui) {
-  const coach = coachOf(ls.get('me', null)), cur = list[0] || null, dkey = 'focusdraft:' + key, draft = ls.get(dkey, null);
+  const coach = canWrite(), cur = list[0] || null, dkey = 'focusdraft:' + key, draft = ls.get(dkey, null);
   const thisWeek = cur && weekOf(cur.at).getTime() === weekOf(new Date()).getTime();
   const by = r => [r.by, r.at && new Date(r.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })].filter(Boolean).map(esc).join(' · ');
   const past = list.slice(1, 13);
   return `<section class="panel focus"><div class="panel-h"><h2>Development focus</h2><span class="note">${cur ? `${esc(fmtWeek(cur.week || weekOf(cur.at)))}${thisWeek ? '' : ' <span class="sflag">not updated this week</span>'}` : ''}
       ${coach && !ui.focusEdit ? `<button type="button" class="btn" id="fo-open">${cur ? 'Update focus' : 'Write focus'}</button>` : ''}</span></div>
     ${ui.focusEdit && coach ? `<div class="fo-edit"><textarea id="fo-txt" rows="6" placeholder="- Stay through the middle on FBs away&#10;- Two-strike approach: shorten up, choke 1 inch">${esc(draft ?? cur?.focus ?? '')}</textarea>
-      <div class="gp-actions"><button type="button" class="btn vbtn-hi" id="fo-pub">Publish for ${esc(fmtWeek(weekOf(new Date())))}</button><button type="button" class="btn" id="fo-cancel">Cancel</button>
-      <span class="muted small" id="fo-msg">Publish opens GitHub with it filled in: tap <b>Commit changes</b> and it shows here in a few minutes. Start a line with "- " for a bullet.</span></div></div>`
+      ${saveArea('fo', 'Publish for ' + fmtWeek(weekOf(new Date())))}${SB.cfg && !sbSession() ? '<div class="gp-actions"><button type="button" class="btn" id="fo-cancel">Cancel</button></div>' : ''}</div>`
     : cur ? `<div class="fo-cur">${planText(cur.focus)}<div class="muted small">${by(cur)}</div></div>` : `<p class="muted" style="margin:0">No development focus written yet.${coach ? '' : ' Coaches: pick your name under Profile to write one.'}</p>`}
     ${past.length && !ui.focusEdit ? `<details class="fo-past"><summary>Past weeks (${past.length})</summary>${past.map(r => `<div class="fo-wk"><div class="fo-wk-h">${esc(fmtWeek(r.week || weekOf(r.at)))} <span class="muted small">${by(r)}</span></div>${planText(r.focus)}</div>`).join('')}</details>` : ''}</section>`;
 }
 function bindFocus(key, p, ui) {
-  const coach = coachOf(ls.get('me', null)); if (!coach) return;
+  if (!canWrite()) return;
+  bindSignIn('fo');
   const op = $('#fo-open'); if (op) op.onclick = () => { ui.focusEdit = true; route(); };
   if (!ui.focusEdit) return;
   const dkey = 'focusdraft:' + key, ta = $('#fo-txt');
   ta.addEventListener('input', () => ls.set(dkey, ta.value)); ta.focus();
   $('#fo-cancel').onclick = () => { ui.focusEdit = false; route(); };
-  $('#fo-pub').onclick = () => {
+  const pub = $('#fo-pub'); if (pub) pub.onclick = async () => {
+    if (SB.cfg) {
+      const week = weekOf(new Date()), wk = `${week.getFullYear()}-${String(week.getMonth() + 1).padStart(2, '0')}-${String(week.getDate()).padStart(2, '0')}`;
+      pub.disabled = true; $('#fo-msg').textContent = 'Saving…';
+      try { const r = await sbAddNote('focus', key, { focus: ta.value.trim(), name: niceName(p.n) }, wk); (S.focusC[key] = S.focusC[key] || []).unshift({ focus: ta.value.trim(), week: wk, by: r.by_name || '', at: r.created_at }); ls.set(dkey, null); ui.focusEdit = false; route(); }
+      catch (err) { pub.disabled = false; $('#fo-msg').innerHTML = `<span class="sb-err">Not saved: ${esc(err.message)}</span> Your text is kept on this device.`; if (!sbSession()) route(); }
+      return;
+    }
+    const coach = coachOf(ls.get('me', null)) || { name: '' };
     const now = new Date(), stamp = now.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
     const rec = { key, name: niceName(p.n), week: weekOf(now).toISOString().slice(0, 10), focus: ta.value.trim(), by: coach.name, at: now.toISOString() };
     const fn = `${key.replace(/[^a-z0-9-]+/gi, '-')}--${stamp}.json`;
@@ -2017,7 +2118,7 @@ async function pagePlayer(key) {
     </div>
     <div class="controls">${both ? segmented('pl-role', [['hit', 'Hitting'], ['pit', 'Pitching']], role, v => { ui.role = v; route(); }) : ''}
       ${seasons.length ? `<label for="pl-season">Season</label>${seasonSelect('pl-season', v => { ui.season = v; route(); }, seasons)}` : ''}</div></div>`;
-  const fo = p.bc ? focusPanel(key, p, (await loadFocus())[key] || [], ui) : '';
+  const fo = p.bc ? focusPanel(key, p, await loadFocus(key), ui) : '';
   if (!seasons.length) { app.innerHTML = head + fo + '<p class="empty">No tracked data yet.</p>'; bindFocus(key, p, ui); return; }
   const hasNcaa = (S.meta.ncaa?.years || []).length > 0;
   if (hasNcaa && !S.pctPool) S.pctPool = ls.get('pctPool', 'p4');

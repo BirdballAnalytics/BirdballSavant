@@ -505,3 +505,6 @@ html[data-theme="light"] .h1-sub { color: var(--maroon); }
 .fo-edit textarea { font: inherit; font-size: .92rem; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); resize: vertical; min-height: 130px; }
 .fo-past { margin-top: 12px; } .fo-past summary { cursor: pointer; color: var(--link); font-weight: 600; font-size: .88rem; }
 .fo-wk { border-top: 1px solid var(--line); padding: 10px 0 2px; margin-top: 8px; } .fo-wk-h { font-weight: 700; margin-bottom: 4px; }
+.sb-login { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sb-login input { font: inherit; font-size: .9rem; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); min-width: 0; flex: 1 1 180px; max-width: 260px; }
+.sb-err { color: var(--pct-hi); font-weight: 600; }
