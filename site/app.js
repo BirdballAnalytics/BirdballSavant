@@ -1038,7 +1038,8 @@ function playerBatCharts(i, se) {
 }
 
 /* ---------- pages ---------- */
-// Home-screen app: everything except Glossary lives under the Hitting or Pitching tab.
+// Same layout everywhere: Home / Hitting / Pitching / Video / Profile tabs (top menu on desktop, bottom bar on phones);
+// everything except Glossary lives under the Hitting or Pitching tab.
 const isApp = () => document.documentElement.classList.contains('standalone');
 const SUBNAV = {
   hitting: [['hitting', 'Leaderboard'], ['scout', 'Scouting'], ['spray', 'Spray chart'], ['games', 'Games'], ['search', 'Pitch search'], ['ncaa', 'NCAA']],
@@ -1060,7 +1061,7 @@ function enterSection(sec, page) {   // a sub-tab was tapped: point shared pages
 }
 function drawSubnav(h) {
   const el = $('#subnav'); if (!el) return;
-  const page = h && h.startsWith('scout-') ? 'scout' : (h || 'home'), sec = isApp() && SUBNAV[S.section] && (SUBNAV.hitting.concat(SUBNAV.pitching).some(([k]) => k === page)) ? sectionFor(page) : null;
+  const page = h && h.startsWith('scout-') ? 'scout' : (h || 'home'), sec = SUBNAV[S.section] && (SUBNAV.hitting.concat(SUBNAV.pitching).some(([k]) => k === page)) ? sectionFor(page) : null;
   if (!sec) { el.hidden = true; el.innerHTML = ''; return; }
   const items = SUBNAV[sec].filter(([k]) => k !== 'ncaa' || (S.meta.ncaa?.years || []).length);
   el.innerHTML = items.map(([k, l]) => `<a href="#${k}" data-sec="${sec}" data-page="${k}" class="${k === page ? 'on' : ''}">${l}</a>`).join('');
@@ -1068,18 +1069,17 @@ function drawSubnav(h) {
   const on = $('a.on', el); if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 document.addEventListener('click', e => {
-  const a = e.target.closest('#subnav a, #tabbar a'); if (!a) return;
+  const a = e.target.closest('#subnav a, #tabbar a, #nav a'); if (!a) return;
   const sec = a.dataset.sec || (a.dataset.tab === 'hitting' || a.dataset.tab === 'pitching' ? a.dataset.tab : null);
   if (sec) enterSection(sec, a.dataset.page || a.dataset.tab);
 });
 
 function setNav(r) {
-  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === r));
   // bottom tab bar (home-screen app)
   const h = decodeURIComponent(location.hash.replace(/^#/, '')), me = ls.get('me', null);
   const mine = me && (h === 'player-' + me || (h.startsWith('pg-') && h.endsWith('-' + me)));
   const tab = h === 'profile' || mine ? 'profile' : !h || h === 'home' ? 'home' : h === 'video' ? 'video' : sectionFor(h) || r;
-  $$('#tabbar a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
+  $$('#tabbar a, #nav a').forEach(a => a.classList.toggle('on', a.dataset.tab ? a.dataset.tab === tab : a.dataset.nav === r));
 }
 
 /* ---------- Profile tab: a player picks their name once (saved on this device) ---------- */

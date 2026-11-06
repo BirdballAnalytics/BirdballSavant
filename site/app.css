@@ -393,7 +393,6 @@ html.standalone .tabbar { display: grid; grid-template-columns: repeat(5, minmax
 html[data-theme="light"] .tabbar a.on { color: var(--maroon); }
 .tabbar a.on svg { stroke-width: 2.3; }
 html.standalone body { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
-html.standalone .nav .in-tabs { display: none; }   /* those pages live in the tab bar */
 /* profile */
 .me-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .me-tag { font-weight: 700; color: var(--gold); margin-right: auto; }
@@ -432,7 +431,20 @@ h3.dlt { font-size: .9rem; margin: 10px 0 4px; text-transform: uppercase; letter
 .lb-more summary { cursor: pointer; font-size: .82rem; color: var(--muted); padding-top: 6px; }
 
 /* home-screen app: only Glossary stays in the top menu; the rest sits under Hitting / Pitching */
-html.standalone .nav a:not([data-nav="glossary"]) { display: none; }
+/* desktop: the same five tabs sit in the top menu (with their icons); Glossary on the right */
+.nav a[data-tab] { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 1.05rem; }
+.nav a svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.nav .nav-gloss { margin-left: auto; font-size: .85rem; opacity: .85; align-self: center; }
+.subnav { justify-content: flex-start; }
+/* phones (home-screen app or browser): tabs move to the bottom bar; only Glossary stays on top */
+html.standalone .nav a[data-tab] { display: none; }
+@media (max-width: 760px) {
+  .tabbar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom, 0px); box-shadow: 0 -4px 14px rgba(0,0,0,.18); }
+  body { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
+  .nav a[data-tab] { display: none; }
+  .nav .nav-gloss { margin-left: 0; }
+}
 .subnav { display: flex; gap: 6px; overflow-x: auto; padding-top: 12px; padding-bottom: 2px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .subnav::-webkit-scrollbar { display: none; }
 .subnav[hidden] { display: none; }
