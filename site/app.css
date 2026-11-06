@@ -485,3 +485,11 @@ html[data-theme="light"] .h1-sub { color: var(--maroon); }
 .gp-edit textarea { font: inherit; font-size: .92rem; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); resize: vertical; min-height: 150px; }
 .gp-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 @media (max-width: 700px) { .gp-cols, .gp-edit, .sc-heat { grid-template-columns: 1fr; } }
+
+/* ---------- weekly development focus (player pages) ---------- */
+.panel.focus { margin-bottom: 18px; border-left: 4px solid var(--gold, #c4a24a); }
+.fo-cur p, .fo-wk p { margin: 0 0 6px; line-height: 1.45; } .fo-cur ul, .fo-wk ul { margin: 0 0 6px; padding-left: 1.1em; } .fo-cur li, .fo-wk li { margin: 3px 0; line-height: 1.4; }
+.fo-edit { display: grid; gap: 10px; }
+.fo-edit textarea { font: inherit; font-size: .92rem; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); resize: vertical; min-height: 130px; }
+.fo-past { margin-top: 12px; } .fo-past summary { cursor: pointer; color: var(--link); font-weight: 600; font-size: .88rem; }
+.fo-wk { border-top: 1px solid var(--line); padding: 10px 0 2px; margin-top: 8px; } .fo-wk-h { font-weight: 700; margin-bottom: 4px; }

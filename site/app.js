@@ -1954,6 +1954,43 @@ async function pageNcaaPlayer(year, side, rawId) {
 }
 
 /* ---------- player page ---------- */
+/* ---------- Weekly development focus (coaches publish from the player page through GitHub) ---------- */
+async function loadFocus() {
+  if (S.focus) return S.focus;
+  try { S.focus = await getJSON('data/' + (S.meta.focus?.file || 'focus.json')); } catch { S.focus = {}; }
+  return S.focus;
+}
+const weekOf = d => { const x = new Date(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };   // that week's Monday
+const fmtWeek = d => 'Week of ' + (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + 'T12:00:00') : new Date(d)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function focusPanel(key, p, list, ui) {
+  const coach = coachOf(ls.get('me', null)), cur = list[0] || null, dkey = 'focusdraft:' + key, draft = ls.get(dkey, null);
+  const thisWeek = cur && weekOf(cur.at).getTime() === weekOf(new Date()).getTime();
+  const by = r => [r.by, r.at && new Date(r.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })].filter(Boolean).map(esc).join(' · ');
+  const past = list.slice(1, 13);
+  return `<section class="panel focus"><div class="panel-h"><h2>Development focus</h2><span class="note">${cur ? `${esc(fmtWeek(cur.week || weekOf(cur.at)))}${thisWeek ? '' : ' <span class="sflag">not updated this week</span>'}` : ''}
+      ${coach && !ui.focusEdit ? `<button type="button" class="btn" id="fo-open">${cur ? 'Update focus' : 'Write focus'}</button>` : ''}</span></div>
+    ${ui.focusEdit && coach ? `<div class="fo-edit"><textarea id="fo-txt" rows="6" placeholder="- Stay through the middle on FBs away&#10;- Two-strike approach: shorten up, choke 1 inch">${esc(draft ?? cur?.focus ?? '')}</textarea>
+      <div class="gp-actions"><button type="button" class="btn vbtn-hi" id="fo-pub">Publish for ${esc(fmtWeek(weekOf(new Date())))}</button><button type="button" class="btn" id="fo-cancel">Cancel</button>
+      <span class="muted small" id="fo-msg">Publish opens GitHub with it filled in: tap <b>Commit changes</b> and it shows here in a few minutes. Start a line with "- " for a bullet.</span></div></div>`
+    : cur ? `<div class="fo-cur">${planText(cur.focus)}<div class="muted small">${by(cur)}</div></div>` : `<p class="muted" style="margin:0">No development focus written yet.${coach ? '' : ' Coaches: pick your name under Profile to write one.'}</p>`}
+    ${past.length && !ui.focusEdit ? `<details class="fo-past"><summary>Past weeks (${past.length})</summary>${past.map(r => `<div class="fo-wk"><div class="fo-wk-h">${esc(fmtWeek(r.week || weekOf(r.at)))} <span class="muted small">${by(r)}</span></div>${planText(r.focus)}</div>`).join('')}</details>` : ''}</section>`;
+}
+function bindFocus(key, p, ui) {
+  const coach = coachOf(ls.get('me', null)); if (!coach) return;
+  const op = $('#fo-open'); if (op) op.onclick = () => { ui.focusEdit = true; route(); };
+  if (!ui.focusEdit) return;
+  const dkey = 'focusdraft:' + key, ta = $('#fo-txt');
+  ta.addEventListener('input', () => ls.set(dkey, ta.value)); ta.focus();
+  $('#fo-cancel').onclick = () => { ui.focusEdit = false; route(); };
+  $('#fo-pub').onclick = () => {
+    const now = new Date(), stamp = now.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+    const rec = { key, name: niceName(p.n), week: weekOf(now).toISOString().slice(0, 10), focus: ta.value.trim(), by: coach.name, at: now.toISOString() };
+    const fn = `${key.replace(/[^a-z0-9-]+/gi, '-')}--${stamp}.json`;
+    window.open(`https://github.com/${GH_REPO}/new/main/data/focus?filename=${encodeURIComponent(fn)}&value=${encodeURIComponent(JSON.stringify(rec, null, 2) + '\n')}`, '_blank', 'noopener');
+    $('#fo-msg').innerHTML = '<b>GitHub opened in a new tab.</b> Tap <b>Commit changes</b> there; it shows here for everyone once the site rebuilds (a few minutes). Your text stays saved on this device until then.';
+  };
+}
+
 async function pagePlayer(key) {
   setNav('');
   const i = S.pidx.get(key);
@@ -1980,15 +2017,17 @@ async function pagePlayer(key) {
     </div>
     <div class="controls">${both ? segmented('pl-role', [['hit', 'Hitting'], ['pit', 'Pitching']], role, v => { ui.role = v; route(); }) : ''}
       ${seasons.length ? `<label for="pl-season">Season</label>${seasonSelect('pl-season', v => { ui.season = v; route(); }, seasons)}` : ''}</div></div>`;
-  if (!seasons.length) { app.innerHTML = head + '<p class="empty">No tracked data yet.</p>'; return; }
+  const fo = p.bc ? focusPanel(key, p, (await loadFocus())[key] || [], ui) : '';
+  if (!seasons.length) { app.innerHTML = head + fo + '<p class="empty">No tracked data yet.</p>'; bindFocus(key, p, ui); return; }
   const hasNcaa = (S.meta.ncaa?.years || []).length > 0;
   if (hasNcaa && !S.pctPool) S.pctPool = ls.get('pctPool', 'p4');
   const alt = hasNcaa && S.pctPool === 'p4' ? await p4Alt(ui.season, role === 'hit' ? 'hitting' : 'pitching') : null;
   const pv = S.meta.video?.players?.[key] || [];
   const pvHtml = pv.length ? `<section class="panel"><div class="panel-h"><h2>Video</h2><span class="note">Bullpens, BP and other clips</span></div>${clipList(pv, c => c.t || 'Clip')}</section>` : '';
-  app.innerHTML = head + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa)) + pvHtml;
+  app.innerHTML = head + fo + (role === 'hit' ? hitterBody(i, p, hitS, ui, alt, hasNcaa) : pitcherBody(i, p, pitS, ui, alt, hasNcaa)) + pvHtml;
   const sel = $('#pl-season'); if (sel) sel.value = ui.season;
   bindPlayer(i, p, role, ui);
+  bindFocus(key, p, ui);
 }
 
 function poolSwitch(hasNcaa) {
