@@ -508,3 +508,9 @@ html[data-theme="light"] .h1-sub { color: var(--maroon); }
 .sb-login { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .sb-login input { font: inherit; font-size: .9rem; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); min-width: 0; flex: 1 1 180px; max-width: 260px; }
 .sb-err { color: var(--pct-hi); font-weight: 600; }
+.fo-attach { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.fo-attach label.btn { cursor: pointer; }
+.fo-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 8px; }
+.fo-file { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-2); color: var(--ink); font-weight: 600; font-size: .88rem; text-decoration: none; }
+.fo-file:hover { border-color: var(--maroon); }
+.fo-file svg { width: 17px; height: 17px; fill: none; stroke: var(--maroon); stroke-width: 2; stroke-linejoin: round; flex: none; }

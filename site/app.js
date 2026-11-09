@@ -1628,6 +1628,20 @@ async function sbAddNote(kind, subject, body, week = null) {
   return rows[0];
 }
 const sbNotes = q => sbRaw('/rest/v1/notes?' + q);
+// PDFs coaches attach to a development focus: Supabase Storage bucket "feedback" (see supabase-pdfs.sql)
+const PDF_MAX = 10 * 1024 * 1024;
+const sbFileUrl = path => `${SB.cfg.url}/storage/v1/object/public/feedback/${path.split('/').map(encodeURIComponent).join('/')}`;
+async function sbUpload(path, file) {
+  const token = await sbToken();
+  const r = await fetch(`${SB.cfg.url}/storage/v1/object/feedback/${path.split('/').map(encodeURIComponent).join('/')}`, {
+    method: 'POST', body: file, headers: { apikey: SB.cfg.key, Authorization: 'Bearer ' + token, 'Content-Type': 'application/pdf', 'x-upsert': 'false', 'cache-control': '3600' } });
+  if (!r.ok) { let m = `upload failed (${r.status})`; try { const d = await r.json(); m = d.message || d.error || m; } catch { /* not JSON */ } throw new Error(/bucket not found/i.test(m) ? 'PDF storage isn\'t set up yet (run supabase-pdfs.sql in Supabase).' : m); }
+  return path;
+}
+function fileLinks(files) {
+  if (!files?.length || !SB.cfg) return '';
+  return `<div class="fo-files">${files.map(f => `<a class="fo-file" href="${esc(sbFileUrl(f.path))}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>${esc(f.name)}</a>`).join('')}</div>`;
+}
 // who may write: with Supabase, anyone signed in as a coach (or who picked a coach profile and will sign in); otherwise a coach profile
 const canWrite = () => !!(coachOf(ls.get('me', null)) || (SB.cfg && sbSession()));
 // sign-in box shown in place of the Save button until a coach signs in
@@ -2048,7 +2062,7 @@ async function loadFocus(key) {
   let list = [...(S.focusJ[key] || [])];
   if (SB.cfg) try {
     const rows = await sbNotes(`kind=eq.focus&subject=eq.${encodeURIComponent(key)}&select=body,week,by_name,created_at&order=created_at.desc&limit=40`);
-    list = list.concat(rows.map(r => ({ focus: r.body?.focus || '', week: r.week || '', by: r.by_name || '', at: r.created_at })));
+    list = list.concat(rows.map(r => ({ focus: r.body?.focus || '', files: r.body?.files || [], week: r.week || '', by: r.by_name || '', at: r.created_at })));
   } catch (err) { console.warn('focus from Supabase:', err.message); }
   list.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
   return (S.focusC[key] = list);
@@ -2063,9 +2077,10 @@ function focusPanel(key, p, list, ui) {
   return `<section class="panel focus"><div class="panel-h"><h2>Development focus</h2><span class="note">${cur ? `${esc(fmtWeek(cur.week || weekOf(cur.at)))}${thisWeek ? '' : ' <span class="sflag">not updated this week</span>'}` : ''}
       ${coach && !ui.focusEdit ? `<button type="button" class="btn" id="fo-open">${cur ? 'Update focus' : 'Write focus'}</button>` : ''}</span></div>
     ${ui.focusEdit && coach ? `<div class="fo-edit"><textarea id="fo-txt" rows="6" placeholder="- Stay through the middle on FBs away&#10;- Two-strike approach: shorten up, choke 1 inch">${esc(draft ?? cur?.focus ?? '')}</textarea>
+      ${SB.cfg && sbSession() ? `<div class="fo-attach"><label class="btn"><input type="file" id="fo-pdf" accept="application/pdf,.pdf" multiple hidden>Attach PDF</label><span class="muted small" id="fo-picked">Optional: weekly feedback or a plan as a PDF (up to 10 MB each).</span></div>` : ''}
       ${saveArea('fo', 'Publish for ' + fmtWeek(weekOf(new Date())))}${SB.cfg && !sbSession() ? '<div class="gp-actions"><button type="button" class="btn" id="fo-cancel">Cancel</button></div>' : ''}</div>`
-    : cur ? `<div class="fo-cur">${planText(cur.focus)}<div class="muted small">${by(cur)}</div></div>` : `<p class="muted" style="margin:0">No development focus written yet.${coach ? '' : ' Coaches: pick your name under Profile to write one.'}</p>`}
-    ${past.length && !ui.focusEdit ? `<details class="fo-past"><summary>Past weeks (${past.length})</summary>${past.map(r => `<div class="fo-wk"><div class="fo-wk-h">${esc(fmtWeek(r.week || weekOf(r.at)))} <span class="muted small">${by(r)}</span></div>${planText(r.focus)}</div>`).join('')}</details>` : ''}</section>`;
+    : cur ? `<div class="fo-cur">${planText(cur.focus)}${fileLinks(cur.files)}<div class="muted small">${by(cur)}</div></div>` : `<p class="muted" style="margin:0">No development focus written yet.${coach ? '' : ' Coaches: pick your name under Profile to write one.'}</p>`}
+    ${past.length && !ui.focusEdit ? `<details class="fo-past"><summary>Past weeks (${past.length})</summary>${past.map(r => `<div class="fo-wk"><div class="fo-wk-h">${esc(fmtWeek(r.week || weekOf(r.at)))} <span class="muted small">${by(r)}</span></div>${planText(r.focus)}${fileLinks(r.files)}</div>`).join('')}</details>` : ''}</section>`;
 }
 function bindFocus(key, p, ui) {
   if (!canWrite()) return;
@@ -2075,11 +2090,32 @@ function bindFocus(key, p, ui) {
   const dkey = 'focusdraft:' + key, ta = $('#fo-txt');
   ta.addEventListener('input', () => ls.set(dkey, ta.value)); ta.focus();
   $('#fo-cancel').onclick = () => { ui.focusEdit = false; route(); };
+  const pick = $('#fo-pdf');
+  if (pick) pick.onchange = () => {
+    const msg = $('#fo-msg'); if (msg && msg.querySelector('.sb-err')) msg.textContent = 'Saves straight to the site: players see it right away.';
+    const fs = [...pick.files], big = fs.filter(f => f.size > PDF_MAX), bad = fs.filter(f => !/\.pdf$/i.test(f.name) && f.type !== 'application/pdf');
+    $('#fo-picked').innerHTML = bad.length ? `<span class="sb-err">Only PDF files: ${esc(bad.map(f => f.name).join(', '))}</span>`
+      : big.length ? `<span class="sb-err">Over 10 MB: ${esc(big.map(f => f.name).join(', '))}</span>`
+      : fs.length ? `Attached: <b>${esc(fs.map(f => f.name).join(', '))}</b>` : 'Optional: weekly feedback or a plan as a PDF (up to 10 MB each).';
+  };
   const pub = $('#fo-pub'); if (pub) pub.onclick = async () => {
     if (SB.cfg) {
       const week = weekOf(new Date()), wk = `${week.getFullYear()}-${String(week.getMonth() + 1).padStart(2, '0')}-${String(week.getDate()).padStart(2, '0')}`;
-      pub.disabled = true; $('#fo-msg').textContent = 'Saving…';
-      try { const r = await sbAddNote('focus', key, { focus: ta.value.trim(), name: niceName(p.n) }, wk); (S.focusC[key] = S.focusC[key] || []).unshift({ focus: ta.value.trim(), week: wk, by: r.by_name || '', at: r.created_at }); ls.set(dkey, null); ui.focusEdit = false; route(); }
+      const fs = pick ? [...pick.files] : [], text = ta.value.trim();
+      if (fs.some(f => f.size > PDF_MAX || (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf'))) { $('#fo-msg').innerHTML = '<span class="sb-err">Remove the files that aren\'t PDFs or are over 10 MB.</span>'; return; }
+      if (!text && !fs.length) { $('#fo-msg').innerHTML = '<span class="sb-err">Write something or attach a PDF first.</span>'; return; }
+      pub.disabled = true;
+      try {
+        const files = [];
+        for (const [n, f] of fs.entries()) {
+          $('#fo-msg').textContent = `Uploading ${f.name} (${n + 1} of ${fs.length})…`;
+          const safe = f.name.replace(/\.pdf$/i, '').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 60) || 'feedback';
+          const path = `${key}/${wk}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}-${safe}.pdf`;
+          await sbUpload(path, f); files.push({ name: f.name, path, size: f.size });
+        }
+        $('#fo-msg').textContent = 'Saving…';
+        const r = await sbAddNote('focus', key, { focus: text, name: niceName(p.n), ...(files.length ? { files } : {}) }, wk);
+        (S.focusC[key] = S.focusC[key] || []).unshift({ focus: text, files, week: wk, by: r.by_name || '', at: r.created_at }); ls.set(dkey, null); ui.focusEdit = false; route(); }
       catch (err) { pub.disabled = false; $('#fo-msg').innerHTML = `<span class="sb-err">Not saved: ${esc(err.message)}</span> Your text is kept on this device.`; if (!sbSession()) route(); }
       return;
     }
